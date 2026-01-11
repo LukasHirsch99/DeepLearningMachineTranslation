@@ -5,185 +5,9 @@ Implements character-level and word-level tokenization with vocabulary managemen
 
 import json
 from collections import Counter
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import re
-import numpy as np
-from collections import defaultdict
 from tokenizers import Tokenizer as HFTokenizer
-
-
-class Tokenizer:
-    """Base tokenizer class with support for special tokens"""
-    
-    # Special tokens
-    PAD_TOKEN = '[pad]'
-    SOS_TOKEN = '[sos]'  # Start of sequence
-    EOS_TOKEN = '[eos]'  # End of sequence
-    UNK_TOKEN = '[unk]'  # Unknown token
-    
-    def __init__(self, lowercase: bool = True):
-        self.lowercase = lowercase
-        
-    def tokenize(self, text: str) -> List[str]:
-        """Tokenize text into a list of tokens"""
-        raise NotImplementedError
-        
-    def detokenize(self, tokens: List[str]) -> str:
-        """Convert tokens back to text"""
-        raise NotImplementedError
-    
-    def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
-        """Convert tokens to indices"""
-        raise NotImplementedError
-    
-    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
-        """
-        Convert indices back to tokens.
-        
-        Args:
-            indices: List of token indices
-            skip_special: Skip special tokens
-            
-        Returns:
-            List of tokens
-        """
-        raise NotImplementedError
-
-class HFTokenizerWrapper(Tokenizer):
-    """
-    Wrapper to make Hugging Face tokenizer compatible with your existing code.
-    """
-    
-    def __init__(self, hf_tokenizer: HFTokenizer):
-        """
-        Initialize wrapper.
-        
-        Args:
-            hf_tokenizer: Hugging Face Tokenizer instance
-        """
-        self.tokenizer = hf_tokenizer
-        
-        # Get special token IDs
-        self.pad_idx = self.tokenizer.token_to_id(self.PAD_TOKEN)
-        self.sos_idx = self.tokenizer.token_to_id(self.SOS_TOKEN)
-        self.eos_idx = self.tokenizer.token_to_id(self.EOS_TOKEN)
-        self.unk_idx = self.tokenizer.token_to_id(self.UNK_TOKEN)
-    
-    def tokenize(self, text: str) -> List[str]:
-        """
-        Tokenize text into subword tokens.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            List of subword tokens
-        """
-        encoding = self.tokenizer.encode(text)
-        return encoding.tokens
-    
-    def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
-        """
-        Convert tokens to indices.
-        
-        Args:
-            tokens: List of tokens (already tokenized)
-            add_sos: Add start-of-sequence token
-            add_eos: Add end-of-sequence token
-            
-        Returns:
-            List of token indices
-        """
-        indices = []
-        
-        if add_sos:
-            indices.append(self.sos_idx)
-        
-        for token in tokens:
-            idx = self.tokenizer.token_to_id(token)
-            if idx is None:
-                idx = self.unk_idx
-            indices.append(idx)
-        
-        if add_eos:
-            indices.append(self.eos_idx)
-        
-        return indices
-    
-    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
-        """
-        Convert indices back to tokens.
-        
-        Args:
-            indices: List of token indices
-            skip_special: Skip special tokens
-            
-        Returns:
-            List of tokens
-        """
-        # Decode to string first
-        text = self.tokenizer.decode(indices, skip_special_tokens=skip_special)
-        # Split back into tokens for compatibility
-        return text.split()
-    
-    def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
-        """
-        Convert indices directly to text string.
-        
-        Args:
-            indices: List of token indices
-            skip_special: Skip special tokens
-            
-        Returns:
-            Decoded text string
-        """
-        return self.tokenizer.decode(indices, skip_special_tokens=skip_special)
-    
-    def __len__(self) -> int:
-        """Return vocabulary size."""
-        return self.tokenizer.get_vocab_size()
-
-
-class WordTokenizer(Tokenizer):
-    """Simple word-level tokenizer"""
-    
-    def tokenize(self, text: str) -> List[str]:
-        """Tokenize text into words"""
-        if self.lowercase:
-            text = text.lower()
-        
-        # Basic word tokenization with punctuation handling
-        # This keeps punctuation as separate tokens
-        tokens = re.findall(r'\w+|[^\w\s]', text)
-        return tokens
-    
-    def detokenize(self, tokens: List[str]) -> str:
-        """Convert tokens back to text"""
-        # Simple joining with spaces, could be improved
-        result = []
-        for i, token in enumerate(tokens):
-            if token in [self.PAD_TOKEN, self.SOS_TOKEN, self.EOS_TOKEN]:
-                continue
-            if i > 0 and token not in '.,!?;:)\']}"' and tokens[i-1] not in '([{':
-                result.append(' ')
-            result.append(token)
-        return ''.join(result).strip()
-
-
-class CharTokenizer(Tokenizer):
-    """Character-level tokenizer"""
-    
-    def tokenize(self, text: str) -> List[str]:
-        """Tokenize text into characters"""
-        if self.lowercase:
-            text = text.lower()
-        return list(text)
-    
-    def detokenize(self, tokens: List[str]) -> str:
-        """Convert tokens back to text"""
-        return ''.join([t for t in tokens if t not in 
-                       [self.PAD_TOKEN, self.SOS_TOKEN, self.EOS_TOKEN]])
-
 
 class Vocabulary:
     """
@@ -345,3 +169,216 @@ class Vocabulary:
         
         print(f"Vocabulary loaded from {filepath} with {len(vocab)} tokens")
         return vocab
+
+
+class Tokenizer:
+    """Base tokenizer class with support for special tokens"""
+    
+    # Special tokens
+    PAD_TOKEN = '[pad]'
+    SOS_TOKEN = '[sos]'  # Start of sequence
+    EOS_TOKEN = '[eos]'  # End of sequence
+    UNK_TOKEN = '[unk]'  # Unknown token
+    
+    def __init__(self, lowercase: bool = True):
+        self.lowercase = lowercase
+        
+    def __len__(self) -> int:
+        """Return vocabulary size."""
+        raise NotImplementedError
+    
+    def build_from_texts(self, texts: List[str]):
+        """
+        Build vocabulary from a list of tokenized texts.
+        
+        Args:
+            texts: List of tokenized texts (list of token lists)
+        """
+        raise NotImplementedError
+
+    def tokenize(self, text: str) -> List[str]:
+        """Tokenize text into a list of tokens"""
+        raise NotImplementedError
+        
+    def detokenize(self, tokens: List[str]) -> str:
+        """Convert tokens back to text"""
+        raise NotImplementedError
+    
+    def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
+        """Convert tokens to indices"""
+        raise NotImplementedError
+    
+    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
+        """
+        Convert indices back to tokens.
+        """
+        raise NotImplementedError
+
+    def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
+        """Convert indices back to text string."""
+        raise NotImplementedError
+
+class HFTokenizerWrapper(Tokenizer):
+    """
+    Wrapper to make Hugging Face tokenizer compatible with your existing code.
+    """
+    
+    def __init__(self, hf_tokenizer: HFTokenizer):
+        """
+        Initialize wrapper.
+        
+        Args:
+            hf_tokenizer: Hugging Face Tokenizer instance
+        """
+        self.tokenizer = hf_tokenizer
+        
+        # Get special token IDs
+        self.pad_idx = self.tokenizer.token_to_id(self.PAD_TOKEN)
+        self.sos_idx = self.tokenizer.token_to_id(self.SOS_TOKEN)
+        self.eos_idx = self.tokenizer.token_to_id(self.EOS_TOKEN)
+        self.unk_idx = self.tokenizer.token_to_id(self.UNK_TOKEN)
+    
+    def tokenize(self, text: str) -> List[str]:
+        """
+        Tokenize text into subword tokens.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            List of subword tokens
+        """
+        encoding = self.tokenizer.encode(text)
+        return encoding.tokens
+    
+    def detokenize(self, tokens: List[str]) -> str:
+        """
+        Convert tokens back to text.
+        
+        Args:
+            tokens: List of tokens
+            
+        Returns:
+            Detokenized text string
+        """
+        return self.tokenizer.decode(self.tokenizer.encode(tokens).ids)
+
+    def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
+        """
+        Convert tokens to indices.
+        
+        Args:
+            tokens: List of tokens (already tokenized)
+            add_sos: Add start-of-sequence token
+            add_eos: Add end-of-sequence token
+            
+        Returns:
+            List of token indices
+        """
+        indices = []
+        
+        if add_sos:
+            indices.append(self.sos_idx)
+        
+        for token in tokens:
+            idx = self.tokenizer.token_to_id(token)
+            if idx is None:
+                idx = self.unk_idx
+            indices.append(idx)
+        
+        if add_eos:
+            indices.append(self.eos_idx)
+        
+        return indices
+    
+    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
+        """
+        Convert indices back to tokens.
+        
+        Args:
+            indices: List of token indices
+            skip_special: Skip special tokens
+            
+        Returns:
+            List of tokens
+        """
+        # Decode to string first
+        text = self.tokenizer.decode(indices, skip_special_tokens=skip_special)
+        # Split back into tokens for compatibility
+        return text.split()
+    
+    def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
+        """
+        Convert indices directly to text string.
+        
+        Args:
+            indices: List of token indices
+            skip_special: Skip special tokens
+            
+        Returns:
+            Decoded text string
+        """
+        return self.tokenizer.decode(indices, skip_special_tokens=skip_special)
+    
+    def __len__(self) -> int:
+        """Return vocabulary size."""
+        return self.tokenizer.get_vocab_size()
+
+
+class WordTokenizer(Tokenizer):
+    """Simple word-level tokenizer"""
+
+    def __init__(
+        self,
+        lowercase: bool = True,
+        vocab: Optional[Vocabulary] = None,
+        max_vocab_size: Optional[int] = None,
+        min_freq: int = 1,
+    ):
+        super().__init__(lowercase=lowercase)
+        # allow sharing an existing vocab; otherwise create empty one
+        self.vocab = vocab if vocab is not None else Vocabulary(
+            max_vocab_size=max_vocab_size,
+            min_freq=min_freq,
+        )
+
+    def __len__(self) -> int:
+        return len(self.vocab)
+    
+    def tokenize(self, text: str) -> List[str]:
+        """Tokenize text into words"""
+        if self.lowercase:
+            text = text.lower()
+        tokens = re.findall(r'\w+|[^\w\s]', text)
+        return tokens
+    
+    def detokenize(self, tokens: List[str]) -> str:
+        """Convert tokens back to text"""
+        # Simple joining with spaces, could be improved
+        result = []
+        for i, token in enumerate(tokens):
+            if token in [self.PAD_TOKEN, self.SOS_TOKEN, self.EOS_TOKEN]:
+                continue
+            if i > 0 and token not in '.,!?;:)\']}"' and tokens[i-1] not in '([{':
+                result.append(' ')
+            result.append(token)
+        return ''.join(result).strip()
+    
+    def build_from_texts(self, texts: List[str]):
+        """Build the vocabulary from texts."""
+
+        tokenized_texts = [self.tokenize(text) for text in texts]
+        self.vocab.build_from_texts(tokenized_texts)
+
+    def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
+        """Convert tokens to indices using the internal vocabulary."""
+        return self.vocab.encode(tokens, add_sos=add_sos, add_eos=add_eos)
+
+    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
+        """Convert indices back to tokens using the internal vocabulary."""
+        return self.vocab.decode(indices, skip_special=skip_special)
+    
+    def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
+        """Convert indices back to text string."""
+        tokens = self.decode(indices, skip_special=skip_special)
+        return self.detokenize(tokens)
