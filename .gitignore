@@ -1,0 +1,7 @@
+data/
+datasets/
+models/
+resources/
+__pycache__/
+.mypy_cache/
+.DS_Store
