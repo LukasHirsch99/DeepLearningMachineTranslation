@@ -33,7 +33,7 @@ def save_model(
         }
     }, model_path)
 
-    print(f"✓ Model saved to: {model_path}")
+    print(f"  ✓ Model saved to: {model_path}")
     print(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"  File size: {model_path.stat().st_size / 1024 / 1024:.2f} MB")
 
@@ -213,7 +213,7 @@ def train(
             break
 
         print(f"\n  Average Loss: {avg_loss:.4f}")
-        print(f"\n  Validation Loss: {val_loss:.4f}")
+        print(f"  Validation Loss: {val_loss:.4f}")
         print(f"  Learning Rate: {current_lr:.6f}")
         print(f"  Time: {epoch_time:.2f}s")
         print(f"  Samples/sec: ~{dataset_size / epoch_time:.0f}")

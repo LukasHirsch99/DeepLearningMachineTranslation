@@ -33,9 +33,6 @@ class WordEmbedding(nn.Module):
         self.d_model = d_model
         self.vocab_size = vocab_size
         
-        # Create embedding lookup table
-        # Shape: [vocab_size, d_model]
-        # Each row is an embedding vector for a token
         self.embedding = nn.Embedding(
             num_embeddings=vocab_size,
             embedding_dim=d_model,
@@ -45,11 +42,6 @@ class WordEmbedding(nn.Module):
         # Initialize embeddings with Xavier/Glorot uniform
         # This gives better initial convergence
         nn.init.xavier_uniform_(self.embedding.weight)
-        
-        # Ensure padding embedding stays zero
-        # if padding_idx is not None:
-        #      with torch.no_grad():
-        #         self.embedding.weight[padding_idx].fill_(0)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -61,15 +53,11 @@ class WordEmbedding(nn.Module):
         Returns:
             Embeddings of shape [batch_size, seq_len, d_model]
         """
-        # Look up embeddings
-        # Input: [batch_size, seq_len] with token indices
-        # Output: [batch_size, seq_len, d_model] with embedding vectors
-        embeddings = self.embedding(x)
         
         # Scale embeddings by sqrt(d_model)
         # This is done in the original Transformer paper
         # Helps balance the magnitude with positional encodings
-        return embeddings * math.sqrt(self.d_model)
+        return self.embedding(x) * math.sqrt(self.d_model)
 
 
 class SharedEmbeddings(nn.Module):

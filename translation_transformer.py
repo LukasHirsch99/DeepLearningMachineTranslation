@@ -277,13 +277,20 @@ class TranslationTransformerPytorch(nn.Module):
         tgt_emb = self.positional_encoding(tgt_emb)
         # tgt_emb = self.dropout(tgt_emb)
         
-        # Encoder
+        # Build explicit causal mask for target sequence
+        tgt_len = tgt_emb.size(1)
+        tgt_mask = self.transformer.generate_square_subsequent_mask(
+            tgt_len, dtype=tgt_emb.dtype, device=tgt_emb.device
+        )
+
+        # Encoder-Decoder with masks
         transformer_out = self.transformer(
-            src_emb, 
-            tgt_emb, 
+            src_emb,
+            tgt_emb,
+            tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
-            tgt_is_causal=True  # Ensure causal masking for decoder
+            memory_key_padding_mask=src_key_padding_mask
         )
 
         # Output projection
