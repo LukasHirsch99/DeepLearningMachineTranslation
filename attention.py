@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,6 +39,7 @@ class MultiHeadAttention(nn.Module):
         key: torch.Tensor,
         value: torch.Tensor,
         is_causal: bool = False,
+        key_padding_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Args:
@@ -46,6 +48,7 @@ class MultiHeadAttention(nn.Module):
             value: [batch, seq_len_kv, d_model]
             mask: [seq_len_q, seq_len_kv] or [batch, seq_len_q, seq_len_kv]
             is_causal: Apply causal mask for autoregressive decoding
+            key_padding_mask: [batch, seq_len_kv] - True where padding (positions to IGNORE)
             
         Returns:
             output: [batch, seq_len_q, d_model]
@@ -75,11 +78,23 @@ class MultiHeadAttention(nn.Module):
             q = q.view(B, T, self.nheads, self.d_head).transpose(1, 2)
             k = k.view(B, seq_len_kv, self.nheads, self.d_head).transpose(1, 2)
             v = v.view(B, seq_len_kv, self.nheads, self.d_head).transpose(1, 2)
+
+        # Convert key_padding_mask to attention mask
+        # Input: True = padding (ignore), False = real token (attend)
+        # scaled_dot_product_attention needs: True = attend, False = ignore (inverted!)
+        attn_mask = None
+        if key_padding_mask is not None and not is_causal:
+            # Invert: False where padding, True where real tokens
+            attn_mask = ~key_padding_mask  # [batch, seq_len_kv]
+            # Reshape for broadcasting: [batch, seq_len_kv] -> [batch, 1, 1, seq_len_kv]
+            # This broadcasts across all heads and query positions
+            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # [batch, 1, 1, seq_len_kv]
+        
         
         # Use PyTorch's optimized scaled_dot_product_attention
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
-            attn_mask=None,
+            attn_mask=attn_mask,
             dropout_p=self.dropout_p if self.training else 0.0,
             is_causal=is_causal
         )

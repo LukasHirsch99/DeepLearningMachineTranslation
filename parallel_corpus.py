@@ -95,7 +95,7 @@ class TranslationDataset(Dataset):
 
 
 def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]], 
-               pad_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+               pad_idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Custom collate function for batching variable-length sequences.
     Pads sequences to the same length within a batch.
@@ -105,11 +105,11 @@ def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]],
         pad_idx: Padding token index
         
     Returns:
-        Dictionary containing:
-            - 'src': Padded source sequences [batch_size, src_len]
-            - 'tgt': Padded target sequences [batch_size, tgt_len]
-            - 'src_lengths': Original source lengths [batch_size]
-            - 'tgt_lengths': Original target lengths [batch_size]
+        Tuple containing:
+            - src_padded: Padded source sequences [batch_size, src_len]
+            - tgt_padded: Padded target sequences [batch_size, tgt_len]
+            - src_key_padding_mask: Source padding mask [batch_size, src_len] (True = padding)
+            - tgt_key_padding_mask: Target padding mask [batch_size, tgt_len] (True = padding)
     """
     # Separate source and target
     src_batch = [item[0] for item in batch]
@@ -122,7 +122,12 @@ def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]],
     src_padded = pad_sequence(src_batch, batch_first=True, padding_value=pad_idx)
     tgt_padded = pad_sequence(tgt_batch, batch_first=True, padding_value=pad_idx)
     
-    return (src_padded, tgt_padded)
+    # Create padding masks (True where padding, False where real tokens)
+    # PyTorch transformer expects True for positions to IGNORE
+    src_key_padding_mask = (src_padded == pad_idx)  # [batch_size, src_len]
+    tgt_key_padding_mask = (tgt_padded == pad_idx)  # [batch_size, tgt_len]
+    
+    return (src_padded, tgt_padded, src_key_padding_mask, tgt_key_padding_mask)
 
 class DataLoaderFactory:
     """Factory for creating train/val/test dataloaders with consistent settings."""

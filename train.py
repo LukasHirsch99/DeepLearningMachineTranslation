@@ -4,12 +4,14 @@ import torch
 from pathlib import Path
 from torch.optim.lr_scheduler import LambdaLR
 
-from tokenization_vocab import Vocabulary
 
-def save_model(model, path, name,
-               optimizer: torch.optim.Optimizer, 
-               num_epochs: int
-               ):
+def save_model(
+    model: torch.nn.Module,
+    path: str,
+    name: str,
+    optimizer: torch.optim.Optimizer, 
+    num_epochs: int
+):
     # Create models directory
     model_dir = Path(path)
     model_dir.mkdir(exist_ok=True)
@@ -41,19 +43,36 @@ def train_epoch(model, dataloader, test_loader, criterion, optimizer, device, sc
     total_loss = 0
     num_batches = 0
     
-    for i, (src, tgt) in enumerate(dataloader):
+    for i, batch in enumerate(dataloader):
+
+        src, tgt, src_key_padding_mask, tgt_key_padding_mask = batch
+        src_key_padding_mask = src_key_padding_mask.to(device)
+        tgt_key_padding_mask = tgt_key_padding_mask.to(device)
+        
+        # tokens... <eos>
         src = src.to(device)  # [batch, src_len]
+        # <sos> tokens... <eos>
         tgt = tgt.to(device)  # [batch, tgt_len]
         
         # Shift target for decoder input and labels
+        # <sos> tokens...
         tgt_input = tgt[:, :-1]  # [batch, tgt_len-1]
+        # tokens... <eos>
         tgt_output = tgt[:, 1:]  # [batch, tgt_len-1]
+        
+        # Also shift the target padding mask
+        tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
         
         # Zero gradients (set_to_none=True is faster than zero_grad())
         optimizer.zero_grad(set_to_none=True)
         
-        # Forward pass
-        output = model(src, tgt_input)  # [batch, tgt_len-1, vocab_size]
+        # Forward pass with masks
+        output = model(
+            src,
+            tgt_input,
+            src_key_padding_mask=src_key_padding_mask,
+            tgt_key_padding_mask=tgt_input_mask
+        )  # [batch, tgt_len-1, vocab_size]
         
         # Reshape for loss calculation
         output = output.reshape(-1, output.shape[-1])
@@ -80,8 +99,9 @@ def train_epoch(model, dataloader, test_loader, criterion, optimizer, device, sc
         # Print progress every 50 batches
         if (i + 1) % 50 == 0:
             avg_loss_so_far = total_loss / num_batches
-            validation_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=1)
-            print(f"  [Batch {i+1}/{len(dataloader)}] - Training Loss: {avg_loss_so_far:.4f}, Validation Loss: {validation_loss:.4f}")
+            # validation_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=1)
+            # print(f"  [Batch {i+1}/{len(dataloader)}] - Training Loss: {avg_loss_so_far:.4f}, Validation Loss: {validation_loss:.4f}")
+            print(f"  [Batch {i+1}/{len(dataloader)}] - Training Loss: {avg_loss_so_far:.4f}")
     
     return total_loss / num_batches
 
@@ -90,15 +110,28 @@ def estimate_loss(model, test_loader, criterion, device, eval_iters):
     model.eval()
     losses = []
 
-    for k, (src, tgt) in enumerate(test_loader):
+    for k, batch in enumerate(test_loader):
         if k >= eval_iters:
             break
+        
+        src, tgt, src_key_padding_mask, tgt_key_padding_mask = batch
+        src_key_padding_mask = src_key_padding_mask.to(device)
+        tgt_key_padding_mask = tgt_key_padding_mask.to(device)
+            
         src = src.to(device)  # [batch, src_len]
         tgt = tgt.to(device)  # [batch, tgt_len]
         tgt_input = tgt[:, :-1]  # [batch, tgt_len-1]
         tgt_output = tgt[:, 1:]  # [batch, tgt_len-1]
+        
+        # Also shift the target padding mask
+        tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
 
-        output = model(src, tgt_input)
+        output = model(
+            src,
+            tgt_input,
+            src_key_padding_mask=src_key_padding_mask,
+            tgt_key_padding_mask=tgt_input_mask
+        )
         output = output.reshape(-1, output.shape[-1])
         tgt_output = tgt_output.reshape(-1)
         
@@ -113,13 +146,11 @@ def estimate_loss(model, test_loader, criterion, device, eval_iters):
 
 def lr_lambda(step, warmup_steps=2000):
     """Learning rate schedule with warmup and decay."""
-    if step < warmup_steps:
-        # Linear warmup
-        return step / warmup_steps
-    else:
-        # Inverse square root decay
-        return 0.5 + 0.5 * (warmup_steps / step) ** 0.5
-
+    step = max(step, 1)
+    return min(
+        step ** -0.5,
+        step * warmup_steps ** -1.5
+    )
 
 def train(
     model, dataloader, dataset_size, train_loader, test_loader,
@@ -130,7 +161,12 @@ def train(
     patience = 3  # Number of epochs to wait for improvement before stopping
 ):
     model.train()
-    scheduler = LambdaLR(optimizer, lambda step: lr_lambda(step, warmup_steps))
+    # scheduler = LambdaLR(optimizer, lambda step: lr_lambda(step, warmup_steps))
+    scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,
+        total_iters=2000
+    )
 
     # Track training history
     train_losses = []
@@ -158,9 +194,7 @@ def train(
         epoch_time = time.time() - start_time
         train_losses.append(avg_loss)
 
-
-        val_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=1)
-        print(f"\n  Validation Loss: {val_loss:.4f}")
+        val_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=eval_iters)
         
         # Early stopping check
         if val_loss < best_val_loss:
@@ -177,19 +211,15 @@ def train(
             print(f"\n⚠ Early stopping triggered after {epoch+1} epochs")
             print(f"Best validation loss: {best_val_loss:.4f}")
             break
-        
+
         print(f"\n  Average Loss: {avg_loss:.4f}")
+        print(f"\n  Validation Loss: {val_loss:.4f}")
         print(f"  Learning Rate: {current_lr:.6f}")
         print(f"  Time: {epoch_time:.2f}s")
         print(f"  Samples/sec: ~{dataset_size / epoch_time:.0f}")
         print(f"  Best Loss So Far: {best_val_loss:.4f}")
         print(f"=" * 60)
         
-        # Test translation every 50 epochs
-        if (epoch + 1) % 5 == 0:
-            test_loss = estimate_loss(model, test_loader, criterion, device, eval_iters)
-            print(f"\n🧪 Validation Loss after epoch {epoch+1}: {test_loss:.4f}")
-
     print("\n✓ Training complete!")
     print(f"Final loss: {train_losses[-1]:.4f}")
     print(f"Best loss: {best_val_loss:.4f}")
