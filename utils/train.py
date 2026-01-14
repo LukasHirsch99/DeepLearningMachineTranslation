@@ -298,13 +298,13 @@ def train(
             )
             if step % nstep_evaluation == 0:
                 nsteps_time = time.time() - start_time
-                avg_loss_so_far = total_loss / num_batches
-                train_losses.append(avg_loss_so_far)
+                avg_loss = total_loss / num_batches
+                train_losses.append(avg_loss)
                 validation_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=eval_iters)
                 validation_losses.append(validation_loss)
                 current_lr = optimizer.param_groups[0]['lr']
 
-                print(f"[Step {step}/{len(train_loader)}] - Training Loss: {avg_loss_so_far:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}")
+                print(f"[Step {step}/{len(train_loader)}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}")
         
                 # Early stopping check
                 if validation_loss < best_val_loss:
@@ -321,6 +321,9 @@ def train(
                     print(f"Best validation loss: {best_val_loss:.4f}")
                     break_training = True
                     break
+
+                total_loss = 0
+                num_batches = 0
 
                 start_time = time.time()
         
