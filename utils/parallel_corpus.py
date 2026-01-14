@@ -6,44 +6,84 @@ Handles WMT datasets, parallel corpus processing, and PyTorch Dataset/DataLoader
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from typing import List, Tuple, Dict, Optional
-from tokenization_vocab import Tokenizer
+from typing import List, Tuple, Dict, Optional, Union, Any
+from .tokenization_vocab import Tokenizer
+
+
+class LazyTranslationPairs:
+    """
+    Wrapper for Hugging Face dataset to provide lazy access to translation pairs.
+    Avoids materializing the entire dataset into memory.
+    """
+    def __init__(self, hf_dataset, src_lang: str = 'de', tgt_lang: str = 'en', mode: str = 'both'):
+        """
+        Args:
+            hf_dataset: Hugging Face dataset (e.g., ds['train'])
+            src_lang: Source language key
+            tgt_lang: Target language key
+            mode: 'src' for source only, 'tgt' for target only, 'both' for tuple
+        """
+        self.hf_dataset = hf_dataset
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
+        self.mode = mode
+    
+    def __len__(self):
+        return len(self.hf_dataset)
+    
+    def __getitem__(self, idx):
+        """Returns source, target, or (source, target) tuple based on mode."""
+        translation = self.hf_dataset[idx]['translation']
+        if self.mode == 'src':
+            return translation[self.src_lang]
+        elif self.mode == 'tgt':
+            return translation[self.tgt_lang]
+        else:  # 'both'
+            return (translation[self.src_lang], translation[self.tgt_lang])
 
 
 class TranslationDataset(Dataset):
     """
-    PyTorch Dataset for neural machine translation.
-    Handles tokenization, encoding, and batching.
+    PyTorch Dataset for neural machine translation with lazy loading.
+    Processes data on-the-fly instead of materializing in memory.
     """
     
     def __init__(self,
-                 source_sentences: List[str],
-                 target_sentences: List[str],
+                 source_sentences: Union[List[str], Any],
+                 target_sentences: Union[List[str], Any],
                  source_tokenizer: Tokenizer,
                  target_tokenizer: Tokenizer,
-                 max_length: Optional[int] = None):
+                 max_length: Optional[int] = None,
+                 lazy: bool = True):
         """
         Initialize translation dataset.
         
         Args:
-            source_sentences: List of source language sentences
-            target_sentences: List of target language sentences
-            source_vocab: Vocabulary for source language
-            target_vocab: Vocabulary for target language
-            max_length: Maximum sequence length
+            source_sentences: List or iterable of source language sentences
+            target_sentences: List or iterable of target language sentences
+            source_tokenizer: Tokenizer for source language
+            target_tokenizer: Tokenizer for target language
+            max_length: Maximum sequence length (filters out longer sequences)
+            lazy: If True, process on-the-fly. If False, preprocess all data (legacy mode)
         """
         self._source_sentences = source_sentences
         self._target_sentences = target_sentences
         self._source_tokenizer = source_tokenizer
         self._target_tokenizer = target_tokenizer
         self.max_length = max_length
+        self.lazy = lazy
         
-        # Preprocess all data
-        self._preprocess()
+        if not lazy:
+            # Legacy mode: preprocess all data
+            self._preprocess()
+        else:
+            # Lazy mode: just store length
+            self._length = len(source_sentences)
+            print(f"Initialized lazy dataset with {self._length} sentence pairs")
         
     def _preprocess(self):
-        """Tokenize and encode all sentences."""
-        print("Preprocessing dataset...")
+        """Tokenize and encode all sentences (legacy mode)."""
+        print("Preprocessing dataset (materialized mode)...")
         
         self.source_encoded = []
         self.target_encoded = []
@@ -76,7 +116,10 @@ class TranslationDataset(Dataset):
     
     def __len__(self) -> int:
         """Return dataset size."""
-        return len(self.source_encoded)
+        if self.lazy:
+            return self._length
+        else:
+            return len(self.source_encoded)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -88,8 +131,33 @@ class TranslationDataset(Dataset):
         Returns:
             Tuple of (source_tensor, target_tensor)
         """
-        src = torch.tensor(self.source_encoded[idx], dtype=torch.long)
-        tgt = torch.tensor(self.target_encoded[idx], dtype=torch.long)
+        if self.lazy:
+            # Process on-the-fly
+            src_sent = self._source_sentences[idx]
+            tgt_sent = self._target_sentences[idx]
+            
+            # Tokenize
+            src_tokens = self._source_tokenizer.tokenize(src_sent)
+            tgt_tokens = self._target_tokenizer.tokenize(tgt_sent)
+            
+            # Apply max_length filter (truncate instead of skip for lazy mode)
+            if self.max_length:
+                src_tokens = src_tokens[:self.max_length]
+                tgt_tokens = tgt_tokens[:self.max_length]
+            
+            # Encode
+            # Source: add <eos> only
+            src_indices = self._source_tokenizer.encode(src_tokens, add_sos=False, add_eos=True)
+            
+            # Target: add <sos> and <eos>
+            tgt_indices = self._target_tokenizer.encode(tgt_tokens, add_sos=True, add_eos=True)
+            
+            src = torch.tensor(src_indices, dtype=torch.long)
+            tgt = torch.tensor(tgt_indices, dtype=torch.long)
+        else:
+            # Use preprocessed data
+            src = torch.tensor(self.source_encoded[idx], dtype=torch.long)
+            tgt = torch.tensor(self.target_encoded[idx], dtype=torch.long)
         
         return src, tgt
 
@@ -138,7 +206,9 @@ class DataLoaderFactory:
         batch_size: int,
         pad_idx: int,
         num_workers: int = 0,
-        shuffle: bool = True
+        shuffle: bool = True,
+        persistent_workers: bool = False,
+        prefetch_factor: int = 2
     ) -> DataLoader:
         """
         Create dataloaders for train, validation, and test sets.
@@ -148,7 +218,9 @@ class DataLoaderFactory:
             batch_size: Batch size for training
             pad_idx: Padding index for collate function
             num_workers: Number of worker processes for data loading
-            shuffle_train: Whether to shuffle training data
+            shuffle: Whether to shuffle data
+            persistent_workers: Keep workers alive between epochs (faster, uses more memory)
+            prefetch_factor: Number of batches to prefetch per worker
             
         Returns:
             Dictionary with 'train', 'val', and optionally 'test' dataloaders
@@ -156,15 +228,22 @@ class DataLoaderFactory:
         # Create collate function with padding index
         collate = lambda batch: collate_fn(batch, pad_idx)
         
-        # Training dataloader (shuffled)
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            collate_fn=collate,
-            num_workers=num_workers,
-            pin_memory=True  # Faster GPU transfer
-        )
+        # Build dataloader kwargs
+        loader_kwargs = {
+            'dataset': dataset,
+            'batch_size': batch_size,
+            'shuffle': shuffle,
+            'collate_fn': collate,
+            'num_workers': num_workers,
+            'pin_memory': torch.cuda.is_available(),  # Only for CUDA
+        }
+        
+        # Add persistent_workers and prefetch_factor only if num_workers > 0
+        if num_workers > 0:
+            loader_kwargs['persistent_workers'] = persistent_workers
+            loader_kwargs['prefetch_factor'] = prefetch_factor
+        
+        return DataLoader(**loader_kwargs)
 
     @staticmethod
     def create_dataloaders(

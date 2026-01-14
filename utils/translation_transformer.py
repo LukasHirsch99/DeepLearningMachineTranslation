@@ -1,10 +1,11 @@
 from torch import nn
 import torch
 from typing import Optional
-from word_embedding import WordEmbedding
-from positional_encoding import PositionalEncoding
-from attention import MultiHeadAttention
+from .word_embedding import WordEmbedding
+from .positional_encoding import PositionalEncoding
+from .attention import MultiHeadAttention
 from torch.nn import Transformer
+from dataclasses import dataclass
 
 class TransformerEncoderLayer(nn.Module):
     """Encoder layer with self-attention and feed-forward network."""
@@ -13,8 +14,8 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         self.self_attn = MultiHeadAttention(d_model, nhead, dropout)
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.norm1 = nn.LayerNorm(d_model, bias=False)
+        self.norm2 = nn.LayerNorm(d_model, bias=False)
         
         # Feed-forward network
         self.ff = nn.Sequential(
@@ -58,9 +59,9 @@ class TransformerDecoderLayer(nn.Module):
         self.self_attn = MultiHeadAttention(d_model, nhead, dropout)
         self.cross_attn = MultiHeadAttention(d_model, nhead, dropout)
         
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
+        self.norm1 = nn.LayerNorm(d_model, bias=False)
+        self.norm2 = nn.LayerNorm(d_model, bias=False)
+        self.norm3 = nn.LayerNorm(d_model, bias=False)
         
         # Feed-forward network
         self.ff = nn.Sequential(
@@ -106,6 +107,16 @@ class TransformerDecoderLayer(nn.Module):
         return x
 
 
+@dataclass
+class TransformerConfig:
+    d_model: int = 512
+    nhead: int = 8
+    num_encoder_layers: int = 6
+    num_decoder_layers: int = 6
+    dim_feedforward: int = 2048
+    dropout: float = 0.1
+    max_len: int = 150
+
 class TranslationTransformer(nn.Module):
     """
     Transformer for sequence-to-sequence machine translation.
@@ -116,43 +127,50 @@ class TranslationTransformer(nn.Module):
         self,
         src_vocab_size: int,
         tgt_vocab_size: int,
-        d_model: int = 512,
-        nhead: int = 8,
-        num_encoder_layers: int = 6,
-        num_decoder_layers: int = 6,
-        dim_feedforward: int = 2048,
-        dropout: float = 0.1,
-        max_len: int = 5000,
+        config: TransformerConfig,
+        sharedVocab: bool = False,
         padding_idx: int = 0
     ):
         super().__init__()
         
-        self.d_model = d_model
+        self.d_model = config.d_model
+        self.sharedVocab = sharedVocab
         
         # Embeddings
-        self.src_embedding = WordEmbedding(src_vocab_size, d_model, padding_idx)
-        self.tgt_embedding = WordEmbedding(tgt_vocab_size, d_model, padding_idx)
+        if sharedVocab:
+            self.src_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
+            self.tgt_embedding = self.src_embedding
+            print(f'{sum(p.numel() for p in self.src_embedding.parameters()):,} parameters in shared embedding')
+        else:
+            self.src_embedding = WordEmbedding(src_vocab_size, config.d_model, padding_idx)
+            self.tgt_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
         
         # Positional encoding
-        self.positional_encoding = PositionalEncoding(d_model, max_len, dropout=dropout)
+        self.positional_encoding = PositionalEncoding(config.d_model, config.max_len, dropout=config.dropout)
         
         # Encoder layers
         self.encoder_layers = nn.ModuleList([
-            TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
-            for _ in range(num_encoder_layers)
+            TransformerEncoderLayer(config.d_model, config.nhead, config.dim_feedforward, config.dropout)
+            for _ in range(config.num_encoder_layers)
         ])
+        print(f'{sum(p.numel() for p in self.encoder_layers.parameters()):,} parameters in encoder layers')
         
         # Decoder layers
         self.decoder_layers = nn.ModuleList([
-            TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout)
-            for _ in range(num_decoder_layers)
+            TransformerDecoderLayer(config.d_model, config.nhead, config.dim_feedforward, config.dropout)
+            for _ in range(config.num_decoder_layers)
         ])
+        print(f'{sum(p.numel() for p in self.decoder_layers.parameters()):,} parameters in decoder layers')
 
-        self.encoder_norm = nn.LayerNorm(d_model)
-        self.decoder_norm = nn.LayerNorm(d_model)
+        self.encoder_norm = nn.LayerNorm(config.d_model, bias=False)
+        self.decoder_norm = nn.LayerNorm(config.d_model, bias=False)
+        print(f'{sum(p.numel() for p in self.encoder_norm.parameters()):,} parameters in encoder norm layer')
+        print(f'{sum(p.numel() for p in self.decoder_norm.parameters()):,} parameters in decoder norm layer')
         
         # Output projection
-        self.fc_out = nn.Linear(d_model, tgt_vocab_size)
+        self.fc_out = nn.Linear(config.d_model, tgt_vocab_size, bias=False)
+        self.fc_out.weight = self.tgt_embedding.embedding.weight  # Weight tying
+        print(f'{sum(p.numel() for p in self.fc_out.parameters()):,} parameters in output projection')
         
     def forward(
         self,
@@ -212,33 +230,28 @@ class TranslationTransformerPytorch(nn.Module):
         self,
         src_vocab_size: int,
         tgt_vocab_size: int,
-        d_model: int = 512,
-        nhead: int = 8,
-        num_encoder_layers: int = 6,
-        num_decoder_layers: int = 6,
-        dim_feedforward: int = 2048,
-        dropout: float = 0.1,
-        max_len: int = 5000,
+        config: TransformerConfig,
         padding_idx: int = 0
     ):
         super().__init__()
         
-        self.d_model = d_model
+        self.d_model = config.d_model
         
         # Embeddings
-        self.src_embedding = WordEmbedding(src_vocab_size, d_model, padding_idx)
-        self.tgt_embedding = WordEmbedding(tgt_vocab_size, d_model, padding_idx)
+        # self.src_embedding = WordEmbedding(src_vocab_size, config.d_model, padding_idx)
+        # self.tgt_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
+        self.embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
         
         # Positional encoding
-        self.positional_encoding = PositionalEncoding(d_model, max_len, dropout=dropout)
+        self.positional_encoding = PositionalEncoding(config.d_model, config.max_len, dropout=config.dropout)
 
         self.transformer = Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=num_encoder_layers,
-            num_decoder_layers=num_decoder_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_encoder_layers=config.num_encoder_layers,
+            num_decoder_layers=config.num_decoder_layers,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
             activation='relu',
             layer_norm_eps=1e-5,
             batch_first=True,
@@ -247,7 +260,7 @@ class TranslationTransformerPytorch(nn.Module):
         )
         
         # Output projection
-        self.fc_out = nn.Linear(d_model, tgt_vocab_size)
+        self.fc_out = nn.Linear(config.d_model, tgt_vocab_size)
         
     def forward(
         self,
@@ -269,11 +282,13 @@ class TranslationTransformerPytorch(nn.Module):
             logits: [batch, tgt_len, tgt_vocab_size]
         """
         # Embeddings and positional encoding
-        src_emb = self.src_embedding(src)
+        # src_emb = self.src_embedding(src)
+        src_emb = self.embedding(src)
         src_emb = self.positional_encoding(src_emb)
         # src_emb = self.dropout(src_emb)
         
-        tgt_emb = self.tgt_embedding(tgt)
+        # tgt_emb = self.tgt_embedding(tgt)
+        tgt_emb = self.embedding(tgt)
         tgt_emb = self.positional_encoding(tgt_emb)
         # tgt_emb = self.dropout(tgt_emb)
         
@@ -297,3 +312,28 @@ class TranslationTransformerPytorch(nn.Module):
         logits = self.fc_out(transformer_out)
         
         return logits
+    
+
+if __name__ == "__main__":
+    configBig = TransformerConfig(
+        d_model=512,
+        nhead=8,
+        num_encoder_layers=6,
+        num_decoder_layers=6,
+        dim_feedforward=2048,
+        dropout=0.1,
+        max_len=150
+    )
+
+    # Initialize the model with larger max_len to handle max_length + special tokens
+    # model = TranslationTransformerPytorch( # 90,166,576 parameters
+    model = TranslationTransformer( # 90,213,680 parameters
+        src_vocab_size=30_000,
+        tgt_vocab_size=30_000,
+        config=configBig,
+        padding_idx=0,
+        sharedVocab=True
+    )
+
+    print(f"Model initialized!")
+    print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
