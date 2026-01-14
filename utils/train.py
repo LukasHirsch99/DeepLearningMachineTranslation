@@ -82,73 +82,6 @@ def save_model(
         }
     }, model_path)
 
-def train_epoch(model, dataloader, test_loader, criterion, optimizer, device, scheduler):
-    """Train for one epoch."""
-    model.train()
-    total_loss = 0
-    num_batches = 0
-    
-    for i, batch in enumerate(dataloader):
-
-        src, tgt, src_key_padding_mask, tgt_key_padding_mask = batch
-        src_key_padding_mask = src_key_padding_mask.to(device)
-        tgt_key_padding_mask = tgt_key_padding_mask.to(device)
-        
-        # tokens... <eos>
-        src = src.to(device)  # [batch, src_len]
-        # <sos> tokens... <eos>
-        tgt = tgt.to(device)  # [batch, tgt_len]
-        
-        # Shift target for decoder input and labels
-        # <sos> tokens...
-        tgt_input = tgt[:, :-1]  # [batch, tgt_len-1]
-        # tokens... <eos>
-        tgt_output = tgt[:, 1:]  # [batch, tgt_len-1]
-        
-        # Also shift the target padding mask
-        tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
-        
-        # Zero gradients (set_to_none=True is faster than zero_grad())
-        optimizer.zero_grad(set_to_none=True)
-        
-        # Forward pass with masks
-        output = model(
-            src,
-            tgt_input,
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=tgt_input_mask
-        )  # [batch, tgt_len-1, vocab_size]
-        
-        # Reshape for loss calculation
-        output = output.reshape(-1, output.shape[-1])
-        tgt_output = tgt_output.reshape(-1)
-        
-        # Calculate loss
-        loss = criterion(output, tgt_output)
-        
-        # Backward pass
-        loss.backward()
-        
-        # Gradient clipping to prevent exploding gradients
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        # Update weights
-        optimizer.step()
-     
-        # Step the scheduler
-        scheduler.step()
-        
-        total_loss += loss.item()
-        num_batches += 1
-
-        # Print progress every 50 batches
-        if (i + 1) % 50 == 0:
-            avg_loss_so_far = total_loss / num_batches
-            # validation_loss = estimate_loss(model, test_loader, criterion, device, eval_iters=1)
-            # print(f"  [Batch {i+1}/{len(dataloader)}] - Training Loss: {avg_loss_so_far:.4f}, Validation Loss: {validation_loss:.4f}")
-            print(f"  [Batch {i+1}/{len(dataloader)}] - Training Loss: {avg_loss_so_far:.4f}")
-    
-    return total_loss / num_batches
 
 @torch.no_grad()
 def estimate_loss(model, test_loader, criterion, device, eval_iters):
@@ -212,8 +145,8 @@ def train(
     steps_without_improvement = 0
     
     print(f"Starting training for {num_steps:,} steps...")
-    print(f"Total batches per epoch: {len(train_loader)}")
-    print(f"Dataset size: {dataset_size} samples")
+    print(f"Total batches per epoch: {len(train_loader):,}")
+    print(f"Dataset size: {dataset_size:,} samples")
     print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f} (with warmup and decay)")
     print(f"=" * 60)
 
