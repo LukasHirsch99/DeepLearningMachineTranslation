@@ -7,13 +7,20 @@ import csv
 import os
 from datetime import datetime
 
+def load_from_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, path: str):
+    checkpoint = torch.load(path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    step = checkpoint.get('step', 0)
+    return model, optimizer, step
+
 
 def log_training_step(
     csv_path: str,
     step: int,
     epoch: int,
     loss: float,
-    optimizer,
+    optimizer: torch.optim.Optimizer,
     extra_metrics: dict | None = None,
 ):
     """
@@ -134,7 +141,8 @@ def train(
     device,
     num_steps = 15,
     eval_iters = 10,  # Number of batches for loss estimation
-    patience = 3  # Number of epochs to wait for improvement before stopping
+    patience = 3,  # Number of epochs to wait for improvement before stopping,
+    checkpoint_path: str | None = None
 ):
     model.train()
 
@@ -153,6 +161,11 @@ def train(
     step = 0
     nstep_evaluation = 100
     break_training = False
+
+    if checkpoint_path is not None:
+        print(f"Loading model and optimizer state from checkpoint: {checkpoint_path}")
+        model, optimizer, start_step = load_from_checkpoint(model, optimizer, checkpoint_path)
+        print(f"Resuming training from step {start_step}")
 
     # Training loop
     while step < num_steps:
