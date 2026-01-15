@@ -164,8 +164,9 @@ def train(
 
     if checkpoint_path is not None:
         print(f"Loading model and optimizer state from checkpoint: {checkpoint_path}")
-        model, optimizer, start_step = load_from_checkpoint(model, optimizer, checkpoint_path)
-        print(f"Resuming training from step {start_step}")
+        model, optimizer, step = load_from_checkpoint(model, optimizer, checkpoint_path)
+        scheduler.last_epoch = step
+        print(f"Resuming training from step {step}")
 
     # Training loop
     while step < num_steps:
