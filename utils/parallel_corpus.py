@@ -226,7 +226,8 @@ class DataLoaderFactory:
             Dictionary with 'train', 'val', and optionally 'test' dataloaders
         """
         # Create collate function with padding index
-        collate = lambda batch: collate_fn(batch, pad_idx)
+        def collate(batch):
+            return collate_fn(batch, pad_idx)
         
         # Build dataloader kwargs
         loader_kwargs = {
