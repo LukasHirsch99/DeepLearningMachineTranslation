@@ -1,11 +1,17 @@
 from datasets import load_dataset
-import torch
-from utils.translation_transformer import TransformerConfig
 from tokenizers import Tokenizer as HFTokenizer, decoders
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Metaspace
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import LambdaLR
+from utils.translation_transformer import TransformerConfig, TranslationTransformer
 from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer
+from utils.parallel_corpus import TranslationDataset, DataLoaderFactory, LazyTranslationPairs
+from utils.train import train
+import os
 from pathlib import Path
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -44,7 +50,7 @@ configBig = TransformerConfig(
 )
 
 # training
-num_steps = 20_000
+num_steps = 100_000
 warmup_steps = 2_000
 eval_iters = 10
 patience = 1_000
@@ -96,10 +102,6 @@ else:
 tokenizer = HFTokenizerWrapper(bpe_tokenizer)
 
 print(f"Vocab size: {bpe_tokenizer.get_vocab_size()}")
-
-from utils.parallel_corpus import TranslationDataset, DataLoaderFactory, LazyTranslationPairs
-from utils.tokenization_vocab import HFTokenizerWrapper
-import os
 
 # Create lazy wrappers - no materialization into lists!
 train_src = LazyTranslationPairs(ds['train'], src_lang='de', tgt_lang='en', mode='src')
@@ -157,8 +159,6 @@ print(f"✓ Using {optimal_workers} workers for parallel processing")
 print(f"Train samples: {len(train_ds):,}, Test samples: {len(test_ds):,}")
 print(f"Train batches: {len(train_loader):,}, Test batches: {len(test_loader):,}")
 
-# Import the TranslationTransformer
-from utils.translation_transformer import TranslationTransformer, TranslationTransformerPytorch
 
 # Initialize the model with larger max_len to handle max_length + special tokens
 model = TranslationTransformer(
@@ -171,14 +171,6 @@ model = TranslationTransformer(
 
 print(f"Model initialized!")
 print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-# Apply PyTorch optimizations
-import torch
-
-# 1. Enable TF32 for faster matmul on Ampere+ GPUs (A100, RTX 3090, etc.)
-# This provides ~2x speedup for matrix multiplications with minimal accuracy loss
-# torch.set_float32_matmul_precision('high')  # Options: 'highest', 'high', 'medium'
-# torch.backends.fp32_precision = 'tf32'
 
 # 2. For MPS (Apple Silicon), ensure we're using optimal settings
 if DEVICE.type == "mps":
@@ -199,11 +191,6 @@ model.train()
 
 print(f"Using device: {DEVICE}")
 print(f"Model moved to {DEVICE}")
-
-import torch.nn as nn
-import torch.optim as optim
-from utils.train import train
-from torch.optim.lr_scheduler import LambdaLR
 
 
 def lr_lambda(step, warmup_steps=4000):
@@ -233,5 +220,6 @@ train_losses, best_loss = train(
     device=DEVICE,
     num_steps=num_steps,
     eval_iters=eval_iters,
-    patience=patience
+    patience=patience,
+    checkpoint_path="./models/aiayn_base_26k5steps.pt"  # Set to None to train from scratch
 )

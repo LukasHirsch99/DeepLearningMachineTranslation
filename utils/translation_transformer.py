@@ -1,9 +1,9 @@
 from torch import nn
 import torch
 from typing import Optional
-from .word_embedding import WordEmbedding
-from .positional_encoding import PositionalEncoding
-from .attention import MultiHeadAttention
+from utils.word_embedding import WordEmbedding
+from utils.positional_encoding import PositionalEncoding
+from utils.attention import MultiHeadAttention
 from torch.nn import Transformer
 from dataclasses import dataclass
 
@@ -116,6 +116,7 @@ class TransformerConfig:
     dim_feedforward: int = 2048
     dropout: float = 0.1
     max_len: int = 150
+
 
 class TranslationTransformer(nn.Module):
     """
@@ -231,6 +232,7 @@ class TranslationTransformerPytorch(nn.Module):
         src_vocab_size: int,
         tgt_vocab_size: int,
         config: TransformerConfig,
+        sharedVocab: bool = False,
         padding_idx: int = 0
     ):
         super().__init__()
@@ -238,9 +240,12 @@ class TranslationTransformerPytorch(nn.Module):
         self.d_model = config.d_model
         
         # Embeddings
-        # self.src_embedding = WordEmbedding(src_vocab_size, config.d_model, padding_idx)
-        # self.tgt_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
-        self.embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
+        if sharedVocab:
+            self.src_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
+            self.tgt_embedding = self.src_embedding
+        else:
+            self.src_embedding = WordEmbedding(src_vocab_size, config.d_model, padding_idx)
+            self.tgt_embedding = WordEmbedding(tgt_vocab_size, config.d_model, padding_idx)
         
         # Positional encoding
         self.positional_encoding = PositionalEncoding(config.d_model, config.max_len, dropout=config.dropout)
@@ -261,6 +266,7 @@ class TranslationTransformerPytorch(nn.Module):
         
         # Output projection
         self.fc_out = nn.Linear(config.d_model, tgt_vocab_size)
+        self.fc_out.weight = self.tgt_embedding.embedding.weight  # Weight tying
         
     def forward(
         self,
@@ -282,13 +288,11 @@ class TranslationTransformerPytorch(nn.Module):
             logits: [batch, tgt_len, tgt_vocab_size]
         """
         # Embeddings and positional encoding
-        # src_emb = self.src_embedding(src)
-        src_emb = self.embedding(src)
+        src_emb = self.src_embedding(src)
         src_emb = self.positional_encoding(src_emb)
         # src_emb = self.dropout(src_emb)
         
-        # tgt_emb = self.tgt_embedding(tgt)
-        tgt_emb = self.embedding(tgt)
+        tgt_emb = self.tgt_embedding(tgt)
         tgt_emb = self.positional_encoding(tgt_emb)
         # tgt_emb = self.dropout(tgt_emb)
         

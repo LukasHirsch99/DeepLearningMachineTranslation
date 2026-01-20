@@ -1,9 +1,10 @@
 # Plot training progress
 import matplotlib.pyplot as plt
 import csv
+import numpy as np
 
 
-csv_path = './training_log.csv'
+csv_path = './training_log100k.csv'
 
 with open(csv_path, mode="r") as f:
     reader = csv.DictReader(f, fieldnames=["timestamp", "step", "epoch", "loss", "lr"])
@@ -12,8 +13,11 @@ with open(csv_path, mode="r") as f:
 
 nthrows = rows[::50]
 
+arr = np.array([float(row["loss"]) for row in rows])
+ntlosses = np.mean(arr.reshape(-1, 1000), axis=1)
+
 plt.figure(figsize=(10, 6))
-plt.plot([int(row["step"]) for row in nthrows], [float(row["loss"]) for row in nthrows], marker='o', linewidth=2, markersize=6)
+plt.plot(range(len(ntlosses)), ntlosses, marker='o', linewidth=2, markersize=6)
 plt.xlabel('Step', fontsize=12)
 plt.ylabel('Training Loss', fontsize=12)
 plt.title('Training Loss Over Time', fontsize=14, fontweight='bold')
@@ -21,7 +25,7 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-print(f"Training Summary:")
+print("Training Summary:")
 print(f"Initial Loss: {float(rows[0]['loss']):.4f}")
 print(f"Final Loss: {float(rows[-1]['loss']):.4f}")
 print(f"Steps: {int(rows[-1]['step']):,}")

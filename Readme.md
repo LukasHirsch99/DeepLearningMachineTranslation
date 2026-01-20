@@ -1,6 +1,10 @@
 ## Download Dataset for vocab building
 
 ```bash
+pip3 install datasets tokenizers torch matplotlib
+```
+
+```bash
 curl -L -o ./datasets/wmt-2014-english-german.zip \
   https://www.kaggle.com/api/v1/datasets/download/mohamedlotfy50/wmt-2014-english-german
 ```

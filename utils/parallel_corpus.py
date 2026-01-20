@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from typing import List, Tuple, Dict, Optional, Union, Any
-from .tokenization_vocab import Tokenizer
+from utils.tokenization_vocab import Tokenizer
 
 
 class LazyTranslationPairs:

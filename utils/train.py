@@ -2,7 +2,7 @@
 import time
 import torch
 from pathlib import Path
-from .translation_transformer import TransformerConfig
+from utils.translation_transformer import TransformerConfig
 import csv
 import os
 from datetime import datetime
@@ -150,23 +150,22 @@ def train(
     train_losses = []
     validation_losses = []
     best_val_loss = float('inf')
-    steps_without_improvement = 0
     
     print(f"Starting training for {num_steps:,} steps...")
     print(f"Total batches per epoch: {len(train_loader):,}")
     print(f"Dataset size: {dataset_size:,} samples")
     print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f} (with warmup and decay)")
-    print(f"=" * 60)
+    print("=" * 60)
 
     step = 0
-    nstep_evaluation = 100
+    nstep_evaluation = 500
     break_training = False
 
     if checkpoint_path is not None:
         print(f"Loading model and optimizer state from checkpoint: {checkpoint_path}")
         model, optimizer, step = load_from_checkpoint(model, optimizer, checkpoint_path)
         scheduler.last_epoch = step
-        print(f"Resuming training from step {step}")
+        print(f"Resuming training from step {step:,}")
 
     # Training loop
     while step < num_steps:
@@ -235,14 +234,7 @@ def train(
             num_batches += 1
 
             step += 1
-            # Print progress every 100 steps
-            log_training_step(
-                csv_path="./training_log.csv",
-                step=step,
-                epoch=step // len(train_loader),
-                loss=loss.item(),
-                optimizer=optimizer
-            )
+            # Print progress every n steps
             if step % nstep_evaluation == 0:
                 nsteps_time = time.time() - start_time
                 avg_loss = total_loss / num_batches
@@ -251,23 +243,20 @@ def train(
                 validation_losses.append(validation_loss)
                 current_lr = optimizer.param_groups[0]['lr']
 
-                print(f"[Step {step}/{len(train_loader)}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}")
+                print(f"[Step {step:,}/{num_steps:,}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}")
         
+                log_training_step(
+                    csv_path="./training_log.csv",
+                    step=step,
+                    epoch=step // len(train_loader),
+                    loss=loss.item(),
+                    optimizer=optimizer
+                )
                 # Early stopping check
                 if validation_loss < best_val_loss:
                     best_val_loss = validation_loss
-                    steps_without_improvement = 0
                     # Save best model
                     save_model(model, config, './models', 'best_model.pt', optimizer, step)
-                else:
-                    steps_without_improvement += 1
-                    print(f"No improvement for {steps_without_improvement} steps(s)")
-                
-                if steps_without_improvement >= patience:
-                    print(f"\n⚠ Early stopping triggered after {step} steps")
-                    print(f"Best validation loss: {best_val_loss:.4f}")
-                    break_training = True
-                    break
 
                 total_loss = 0
                 num_batches = 0
