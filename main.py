@@ -22,8 +22,11 @@ ds = load_dataset("wmt/wmt14", "de-en")
 vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
 
+checkpoint_path = "./models/aiayn_base_100k.pt"
+checkpoint_path = None  # Set to None to train from scratch
+
 training_samples = len(ds["train"])
-batch_size = 64
+batch_size = 256
 
 dataset_max_sample_len = 100
 sharedVocab = True
@@ -238,7 +241,7 @@ def main():
         num_steps=num_steps,
         eval_iters=eval_iters,
         patience=patience,
-        checkpoint_path="./models/aiayn_base_100k.pt"
+        checkpoint_path=checkpoint_path
     )
 
 
