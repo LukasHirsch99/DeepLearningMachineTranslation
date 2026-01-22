@@ -186,8 +186,8 @@ def train(
             src_key_padding_mask = src_key_padding_mask.to(device)
             tgt_key_padding_mask = tgt_key_padding_mask.to(device)
             
-            # tokens... <eos>
-            src = src.to(device)  # [batch, src_len]
+            # <sos> tokens... <eos>
+            src = src[:, 1:].to(device)  # [batch, src_len]
             # <sos> tokens... <eos>
             tgt = tgt.to(device)  # [batch, tgt_len]
             
