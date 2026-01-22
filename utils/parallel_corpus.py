@@ -4,6 +4,7 @@ Handles WMT datasets, parallel corpus processing, and PyTorch Dataset/DataLoader
 """
 
 import torch
+from functools import partial
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from typing import List, Tuple, Dict, Optional, Union, Any
@@ -161,6 +162,49 @@ class TranslationDataset(Dataset):
         
         return src, tgt
 
+class TranslationDataset2(Dataset):
+    """
+    PyTorch Dataset for neural machine translation with lazy loading.
+    Processes data on-the-fly instead of materializing in memory.
+    """
+    
+    def __init__(self,
+                 source_sentences: List[torch.Tensor],
+                 target_sentences: List[torch.Tensor],
+                 max_length: Optional[int] = None
+    ):
+        """
+        Initialize translation dataset.
+        
+        Args:
+            source_sentences: List or iterable of source language sentences
+            target_sentences: List or iterable of target language sentences
+            max_length: Maximum sequence length (filters out longer sequences)
+        """
+        self._source_sentences = source_sentences
+        self._target_sentences = target_sentences
+        self.max_length = max_length
+        self._length = len(source_sentences)
+    
+    def __len__(self) -> int:
+        """Return dataset size."""
+        return self._length
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get a single training example.
+        
+        Args:
+            idx: Index of the example
+
+        Returns:
+            Tuple of (source_tensor, target_tensor)
+        """
+        # Process on-the-fly
+        src = self._source_sentences[idx]
+        tgt = self._target_sentences[idx]
+        
+        return src, tgt
 
 def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]], 
                pad_idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -202,7 +246,7 @@ class DataLoaderFactory:
     
     @staticmethod
     def create_dataloader(
-        dataset: TranslationDataset,
+        dataset: TranslationDataset2,
         batch_size: int,
         pad_idx: int,
         num_workers: int = 0,
@@ -225,9 +269,8 @@ class DataLoaderFactory:
         Returns:
             Dictionary with 'train', 'val', and optionally 'test' dataloaders
         """
-        # Create collate function with padding index
-        def collate(batch):
-            return collate_fn(batch, pad_idx)
+        # Use partial so collate is picklable for multiprocessing workers
+        collate = partial(collate_fn, pad_idx=pad_idx)
         
         # Build dataloader kwargs
         loader_kwargs = {
@@ -248,9 +291,9 @@ class DataLoaderFactory:
 
     @staticmethod
     def create_dataloaders(
-        train_dataset: TranslationDataset,
-        val_dataset: TranslationDataset,
-        test_dataset: Optional[TranslationDataset],
+        train_dataset: TranslationDataset2,
+        val_dataset: TranslationDataset2,
+        test_dataset: Optional[TranslationDataset2],
         batch_size: int,
         pad_idx: int,
         num_workers: int = 0,
@@ -271,8 +314,8 @@ class DataLoaderFactory:
         Returns:
             Dictionary with 'train', 'val', and optionally 'test' dataloaders
         """
-        # Create collate function with padding index
-        collate = lambda batch: collate_fn(batch, pad_idx)
+        # Use partial so collate is picklable for multiprocessing workers
+        collate = partial(collate_fn, pad_idx=pad_idx)
         
         # Training dataloader (shuffled)
         train_loader = DataLoader(

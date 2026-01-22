@@ -207,7 +207,11 @@ class Tokenizer:
     def encode(self, tokens: List[str], add_sos: bool = False, add_eos: bool = False) -> List[int]:
         """Convert tokens to indices"""
         raise NotImplementedError
-    
+
+    def encode_batch(self, texts: List[str], add_sos: bool = False, add_eos: bool = False) -> List[List[int]]:
+        """Encode a batch of texts into lists of indices"""
+        raise NotImplementedError
+
     def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
         """
         Convert indices back to tokens.
@@ -290,6 +294,22 @@ class HFTokenizerWrapper(Tokenizer):
             indices.append(self.eos_idx)
         
         return indices
+    
+    def encode_batch(self, texts: List[str], add_sos: bool = False, add_eos: bool = False) -> List[List[int]]:
+        """
+        Encode a batch of texts into lists of indices.
+        
+        Args:
+            texts: List of input texts
+            add_sos: Add start-of-sequence token
+            add_eos: Add end-of-sequence token
+            
+        Returns:
+            List of lists of token indices
+        """
+        # Use fast batch encoding - add_special_tokens already includes BOS/EOS
+        encodings = self.tokenizer.encode_batch(texts, add_special_tokens=True)
+        return [enc.ids for enc in encodings]
     
     def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
         """

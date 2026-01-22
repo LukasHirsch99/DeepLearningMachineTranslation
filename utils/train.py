@@ -7,8 +7,8 @@ import csv
 import os
 from datetime import datetime
 
-def load_from_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, path: str):
-    checkpoint = torch.load(path)
+def load_from_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, path: str, device=torch.device('cpu')):
+    checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     step = checkpoint.get('step', 0)
@@ -163,7 +163,7 @@ def train(
 
     if checkpoint_path is not None:
         print(f"Loading model and optimizer state from checkpoint: {checkpoint_path}")
-        model, optimizer, step = load_from_checkpoint(model, optimizer, checkpoint_path)
+        model, optimizer, step = load_from_checkpoint(model, optimizer, checkpoint_path, device=device)
         scheduler.last_epoch = step
         print(f"Resuming training from step {step:,}")
 
