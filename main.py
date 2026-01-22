@@ -107,6 +107,9 @@ def main():
 
 
     tokenizer = HFTokenizerWrapper(bpe_tokenizer)
+    # Enforce maximum sequence length to match model positional encoding budget
+    tokenizer.tokenizer.enable_truncation(max_length=dataset_max_sample_len)
+    # tokenizer.tokenizer.enable_padding(length=dataset_max_sample_len, pad_id=tokenizer.pad_idx, pad_token=Tokenizer.PAD_TOKEN)
 
     print(f"Vocab size: {bpe_tokenizer.get_vocab_size()}")
 
