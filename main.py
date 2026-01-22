@@ -208,10 +208,10 @@ def main():
     else:
         print("✓ Running on CPU (no GPU optimizations)")
 
-    model_compiled = torch.compile(model, mode='default')
 
     # Move model to device (GPU if available)
     model = model.to(DEVICE)
+    model_compiled = torch.compile(model, mode='default')
     model.train()
 
     print(f"Using device: {DEVICE}")
