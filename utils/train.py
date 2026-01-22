@@ -198,7 +198,9 @@ def train(
             tgt_output = tgt[:, 1:]  # [batch, tgt_len-1]
             
             # Also shift the target padding mask
+            src_input_mask = src_key_padding_mask[:, :-1]  # [batch, src_len-1]
             tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
+
             
             # Zero gradients (set_to_none=True is faster than zero_grad())
             optimizer.zero_grad(set_to_none=True)
@@ -207,7 +209,7 @@ def train(
             output = model(
                 src,
                 tgt_input,
-                src_key_padding_mask=src_key_padding_mask,
+                src_key_padding_mask=src_input_mask,
                 tgt_key_padding_mask=tgt_input_mask
             )  # [batch, tgt_len-1, vocab_size]
             
