@@ -80,13 +80,33 @@ class PositionalEncoding(nn.Module):
         # x shape: [batch_size, seq_len, d_model]
         # self.pe shape: [1, max_len, d_model]
 
+        seq_len = x.size(1)
+
+        # Extend positional encodings if sequence length exceeds precomputed max_len
+        if seq_len > self.pe.size(1):
+            self._extend_pe(seq_len, device=x.device)
+
         # Add positional encoding to embeddings
         # Broadcasting handles the batch dimension
         # We only use the first seq_len positions
-        x = x + self.pe[:, : x.size(1), :]
+        x = x + self.pe[:, :seq_len, :].to(x.device)
 
         # Apply dropout
         return self.dropout(x)
+
+
+    def _extend_pe(self, new_max_len: int, device: torch.device) -> None:
+        """Recompute positional encodings to cover longer sequences."""
+        pe = torch.zeros(new_max_len, self.d_model, device=device)
+        position = torch.arange(0, new_max_len, dtype=torch.float, device=device).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, dtype=torch.float, device=device)
+            * (-math.log(10000.0) / self.d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.pe = pe
 
 
 class LearnedPositionalEncoding(nn.Module):
