@@ -4,20 +4,21 @@ import csv
 import numpy as np
 
 
-csv_path = "./training_log100k.csv"
+csv_path = "./training_log_tfdecay.csv"
 
 with open(csv_path, mode="r") as f:
     reader = csv.DictReader(f, fieldnames=["timestamp", "step", "epoch", "loss", "lr"])
     rows = [row for row in reader]
     rows.pop(0)  # Remove header row if present
 
-nthrows = rows[::50]
+#nthrows = rows[::50]
 
-arr = np.array([float(row["loss"]) for row in rows])
-ntlosses = np.mean(arr.reshape(-1, 1000), axis=1)
+#arr = np.array([float(row["loss"]) for row in rows])
+#ntlosses = np.mean(arr.reshape(-1, 1000), axis=1)
+#ntlosses = rows
 
 plt.figure(figsize=(10, 6))
-plt.plot(range(len(ntlosses)), ntlosses, marker="o", linewidth=2, markersize=6)
+plt.plot(range(len(rows)), [float(row["loss"]) for row in rows], marker="o", linewidth=2, markersize=6)
 plt.xlabel("Step", fontsize=12)
 plt.ylabel("Training Loss", fontsize=12)
 plt.title("Training Loss Over Time", fontsize=14, fontweight="bold")
