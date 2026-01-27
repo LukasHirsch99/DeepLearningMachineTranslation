@@ -140,6 +140,32 @@ def estimate_loss(
     return sum(losses) / len(losses)
 
 
+@torch.no_grad()
+def greedy_decode_batch(
+    model, src, src_key_padding_mask, max_len, device, sos_idx, pad_idx
+):
+    model.eval()
+    batch_size = src.size(0)
+    # start with SOS = 1 (adjust if your vocab differs)
+
+    generated = torch.full((batch_size, 1), sos_idx, device=device, dtype=torch.long)
+    pad_mask = torch.zeros((batch_size, 1), device=device, dtype=torch.bool)
+
+    for _ in range(max_len - 1):
+        logits = model(
+            src,
+            generated,
+            src_key_padding_mask=src_key_padding_mask,
+            tgt_key_padding_mask=pad_mask,
+        )
+        next_token = logits[:, -1].argmax(dim=-1, keepdim=True)
+        generated = torch.cat([generated, next_token], dim=1)
+        pad_mask = torch.cat([pad_mask, next_token.eq(pad_idx)], dim=1)
+
+    model.train()
+    return generated, pad_mask
+
+
 def train(
     model,
     config: TransformerConfig,
@@ -150,10 +176,22 @@ def train(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     device,
+    sos_idx: int,
+    pad_idx: int,
+    teacher_forcing_start: float = 1.0,
+    teacher_forcing_end: float = 0.1,
+    teacher_forcing_decay_steps: int = 50_000,
     num_steps=15,
     eval_iters=10,  # Number of batches for loss estimation
     checkpoint_path: str | None = None,
 ):
+    def teacher_forcing_ratio(step: int) -> float:
+        # Linear decay; clamp at teacher_forcing_end
+        slope = (teacher_forcing_start - teacher_forcing_end) / max(
+            1, teacher_forcing_decay_steps
+        )
+        return max(teacher_forcing_end, teacher_forcing_start - slope * step)
+
     model.train()
 
     # Track training history
@@ -192,7 +230,6 @@ def train(
         num_batches = 0
 
         for batch in train_loader:
-
             if step >= num_steps:
                 break
 
@@ -200,12 +237,29 @@ def train(
 
             src = src.to(device)  # [batch, src_len]
             tgt = tgt.to(device)  # [batch, tgt_len]
-            tgt_input = tgt[:, :-1]  # [batch, tgt_len-1]
             tgt_output = tgt[:, 1:]  # [batch, tgt_len-1]
-
-            # Also shift the target padding mask
             src_input_mask = src_key_padding_mask.to(device)  # [batch, src_len]
-            tgt_input_mask = tgt_key_padding_mask[:, :-1].to(device)  # [batch, tgt_len-1]
+
+            tf_ratio = teacher_forcing_ratio(step)
+            use_teacher = torch.rand(1).item() < tf_ratio
+
+            if use_teacher:
+                tgt_input = tgt[:, :-1]
+                tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
+            else:
+                # Greedy decode to build decoder input without ground truth
+                tgt_input, tgt_input_mask = greedy_decode_batch(
+                    model,
+                    src,
+                    src_key_padding_mask,
+                    max_len=tgt.size(1) - 1,
+                    device=device,
+                    sos_idx=sos_idx,
+                    pad_idx=pad_idx,
+                )
+
+            tgt_input = tgt_input.to(device)
+            tgt_input_mask = tgt_input_mask.to(device)  # [batch, tgt_len-1]
 
             # Zero gradients (set_to_none=True is faster than zero_grad())
             optimizer.zero_grad(set_to_none=True)
@@ -262,6 +316,7 @@ def train(
                     epoch=step // len(train_loader),
                     loss=loss.item(),
                     optimizer=optimizer,
+                    extra_metrics={"tf_ratio": tf_ratio, "val_loss": validation_loss},
                 )
                 # Early stopping check
                 if validation_loss < best_val_loss:
