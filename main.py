@@ -22,7 +22,7 @@ vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
 checkpoint_path = None  # "./checkpoints/transformer_checkpoint.pt"
 
-batch_size = 64
+batch_size = 128
 dataset_max_sample_len = 100
 
 sharedVocab = True
@@ -37,18 +37,15 @@ configBig = TransformerConfig(
     max_len=150,
 )
 
-label_smoothing = 0.1
-
 # training
 num_steps = 100_000
-warmup_steps = 2_000
+warmup_steps = 4_000
 eval_iters = 10
 patience = 1_000
 
 label_smoothing = 0.1
 
 # optimizer
-start_lr = 3e-4
 betas = (0.9, 0.98)
 epsilon = 1e-9
 

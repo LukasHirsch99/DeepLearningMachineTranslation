@@ -283,7 +283,7 @@ def train(
             loss.backward()
 
             # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
 
             # Update weights
             optimizer.step()
@@ -295,6 +295,10 @@ def train(
             num_batches += 1
 
             step += 1
+            print(
+                f"[Step {step:,}/{num_steps:,}] - Training Loss: {loss.item():.4f}\r", end=""
+            )
+            
             # Print progress every n steps
             if step % nstep_evaluation == 0:
                 nsteps_time = time.time() - start_time
@@ -305,19 +309,20 @@ def train(
                 )
                 validation_losses.append(validation_loss)
                 current_lr = optimizer.param_groups[0]["lr"]
-
+                
                 print(
-                    f"[Step {step:,}/{num_steps:,}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}"
+                    f"\n[Step {step:,}/{num_steps:,}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}"
                 )
 
                 log_training_step(
                     csv_path="./training_log.csv",
                     step=step,
                     epoch=step // len(train_loader),
-                    loss=loss.item(),
+                    loss=avg_loss,
                     optimizer=optimizer,
                     extra_metrics={"tf_ratio": tf_ratio, "val_loss": validation_loss},
                 )
+                
                 # Early stopping check
                 if validation_loss < best_val_loss:
                     best_val_loss = validation_loss
