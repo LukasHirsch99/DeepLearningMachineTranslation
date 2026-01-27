@@ -1,35 +1,43 @@
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
+import torch
+from utils.translation_transformer import TransformerConfig
+from torch.utils.data import DataLoader
+from utils.parallel_corpus import collate_fn
 from tokenizers import Tokenizer as HFTokenizer, decoders
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Metaspace
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR
-from utils.translation_transformer import TransformerConfig, TranslationTransformer
+from tokenizers.processors import TemplateProcessing
 from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer
-from utils.parallel_corpus import TranslationDataset, TranslationDataset2, DataLoaderFactory, LazyTranslationPairs
-from utils.train import train
-import os
 from pathlib import Path
+from functools import partial
+from utils.translation_transformer import TranslationTransformer
+import torch.nn as nn
+from torch import optim
+from torch.optim.lr_scheduler import LambdaLR
+from utils.train import train
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
-
-ds = load_dataset("wmt/wmt14", "de-en")
 
 vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
-
 checkpoint_path = "./models/aiayn_base_100k.pt"
-checkpoint_path = None  # Set to None to train from scratch
 
-training_samples = len(ds["train"])
-batch_size = 256
-
+batch_size = 64
 dataset_max_sample_len = 100
+
 sharedVocab = True
+
+configBig = TransformerConfig(
+    d_model=512,
+    nhead=8,
+    num_encoder_layers=6,
+    num_decoder_layers=6,
+    dim_feedforward=2048,
+    dropout=0.1,
+    max_len=150,
+)
+
+label_smoothing = 0.1
 
 # training
 num_steps = 100_000
@@ -44,41 +52,18 @@ start_lr = 3e-4
 betas = (0.9, 0.98)
 epsilon = 1e-9
 
-# bpe_v3_ep12
-configSmall = TransformerConfig(
-    d_model=256,
-    nhead=8,
-    num_encoder_layers=4,
-    num_decoder_layers=4,
-    dim_feedforward=1024,
-    dropout=0.1,
-    max_len=150
-)
-# base model according to the paper 'Attention is all you need'
-# big_3.8770loss
-configBig = TransformerConfig(
-    d_model=512,
-    nhead=8,
-    num_encoder_layers=6,
-    num_decoder_layers=6,
-    dim_feedforward=2048,
-    dropout=0.1,
-    max_len=150
-)
 
-def main():
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using device: {DEVICE}")
-
-    ds = load_dataset("wmt/wmt14", "de-en")
-
-    # 1. Tokenizer setup
-
+def get_tokenizer() -> HFTokenizer:
     bpe_tokenizer = HFTokenizer(BPE(unk_token=Tokenizer.UNK_TOKEN))
     trainer = BpeTrainer(
-        special_tokens=[Tokenizer.PAD_TOKEN, Tokenizer.SOS_TOKEN, Tokenizer.EOS_TOKEN, Tokenizer.UNK_TOKEN],
+        special_tokens=[
+            Tokenizer.PAD_TOKEN,
+            Tokenizer.SOS_TOKEN,
+            Tokenizer.EOS_TOKEN,
+            Tokenizer.UNK_TOKEN,
+        ],
         vocab_size=vocab_size,
-        show_progress=True
+        show_progress=True,
     )
 
     bpe_tokenizer.pre_tokenizer = Metaspace()
@@ -93,99 +78,123 @@ def main():
 
     if pretrained:
         bpe_tokenizer = HFTokenizer.from_file(vocab_path)
+
+        bpe_tokenizer.post_processor = TemplateProcessing(
+            single=f"{Tokenizer.SOS_TOKEN} $A {Tokenizer.EOS_TOKEN}",
+            special_tokens=[
+                (Tokenizer.SOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.SOS_TOKEN)),
+                (Tokenizer.EOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.EOS_TOKEN)),
+            ],
+        )
     else:
         bpe_tokenizer.train(
             [
-                './datasets/wmt14_translate_de-en_test.csv',
-                './datasets/wmt14_translate_de-en_train.csv',
-                './datasets/wmt14_translate_de-en_validation.csv',
+                "./datasets/wmt14_translate_de-en_test.csv",
+                "./datasets/wmt14_translate_de-en_train.csv",
+                "./datasets/wmt14_translate_de-en_validation.csv",
             ],
-            trainer=trainer
+            trainer=trainer,
         )
 
         bpe_tokenizer.save(vocab_path)
 
+    print(f"Vocab size: {bpe_tokenizer.get_vocab_size():,}")
 
-    tokenizer = HFTokenizerWrapper(bpe_tokenizer)
-    # Enforce maximum sequence length to match model positional encoding budget
-    tokenizer.tokenizer.enable_truncation(max_length=dataset_max_sample_len)
-    # tokenizer.tokenizer.enable_padding(length=dataset_max_sample_len, pad_id=tokenizer.pad_idx, pad_token=Tokenizer.PAD_TOKEN)
+    return bpe_tokenizer
 
-    print(f"Vocab size: {bpe_tokenizer.get_vocab_size()}")
 
-    # 2. Dataset and DataLoader setup
+def tokenizer_decode_batch(tokenizer: HFTokenizerWrapper, datasets: DatasetDict):
 
-    # Create lazy wrappers - no materialization into lists!
-    # train_src = LazyTranslationPairs(ds['train'], src_lang='de', tgt_lang='en', mode='src')
-    # train_tgt = LazyTranslationPairs(ds['train'], src_lang='de', tgt_lang='en', mode='tgt')
-
-    # test_src = LazyTranslationPairs(ds['test'], src_lang='de', tgt_lang='en', mode='src')
-    # test_tgt = LazyTranslationPairs(ds['test'], src_lang='de', tgt_lang='en', mode='tgt')
-
-    print("Tokenizing dataset (this may take a few minutes, will be cached for future runs)...")
-
-    def tokenize_function(examples):
+    def tokenize_batch(examples):
+        inputs = [e["de"] for e in examples["translation"]]
+        targets = [e["en"] for e in examples["translation"]]
+        input_encodings = tokenizer.tokenizer.encode_batch_fast(inputs)
+        target_encodings = tokenizer.tokenizer.encode_batch_fast(targets)
         return {
-            'source_indices': tokenizer.encode_batch([e['de'] for e in examples['translation']]),
-            'target_indices': tokenizer.encode_batch([e['en'] for e in examples['translation']])
+            "src": [enc.ids[1:] for enc in input_encodings],  # remove sos token
+            "tgt": [enc.ids for enc in target_encodings],  # keep sos token
         }
 
-    indexed_ds = ds.map(
-        tokenize_function,
+    tokenized_ds = datasets.map(
+        tokenize_batch,
         batched=True,
-        batch_size=10000,
         num_proc=8,
-        remove_columns=['translation'],
-        load_from_cache_file=True,  # Use cached results if available
-        desc="Tokenizing"
+        remove_columns=["translation"],
+        load_from_cache_file=True,
+        cache_file_names={
+            "train": "./data/tokenized_dataset/tokenized_wmt14_deen_train.arrow",
+            "test": "./data/tokenized_dataset/tokenized_wmt14_deen_test.arrow",
+            "validation": "./data/tokenized_dataset/tokenized_wmt14_deen_validation.arrow",
+        },
     )
 
-    # Convert lists of ids to torch.Tensor on access (still stored compactly in Arrow)
-    indexed_ds = indexed_ds.with_format(
-        type='torch',
-        columns=['source_indices', 'target_indices'],
-        output_all_columns=False,
-    )
-
-    # Create datasets with lazy loading (processes on-the-fly, no upfront preprocessing)
-    train_ds = TranslationDataset2(
-        source_sentences=indexed_ds['train']['source_indices'],
-        target_sentences=indexed_ds['train']['target_indices'],
-        max_length=dataset_max_sample_len
-    )
-
-    test_ds = TranslationDataset2(
-        source_sentences=indexed_ds['test']['source_indices'],
-        target_sentences=indexed_ds['test']['target_indices'],
-        max_length=dataset_max_sample_len
-    )
-
-    # Optimize num_workers based on CPU cores
-    optimal_workers = min(8, os.cpu_count() or 4)
-
-    train_loader = DataLoaderFactory.create_dataloader(
-        dataset=train_ds,
+    collate = partial(collate_fn, pad_idx=tokenizer.pad_idx)
+    dl_train = DataLoader(
+        tokenized_ds["train"].with_format("torch"),
         batch_size=batch_size,
-        pad_idx=tokenizer.pad_idx,
-        num_workers=optimal_workers,
-        shuffle=True,  # Shuffle for training
-        persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=4  # Prefetch more batches
+        num_workers=4,
+        collate_fn=collate,
+        shuffle=True,
     )
-
-    test_loader = DataLoaderFactory.create_dataloader(
-        dataset=test_ds,
+    dl_test = DataLoader(
+        tokenized_ds["test"].with_format("torch"),
+        num_workers=4,
         batch_size=batch_size,
-        pad_idx=tokenizer.pad_idx,
-        num_workers=optimal_workers,
-        shuffle=False,  # No shuffle for testing
-        persistent_workers=True,
-        prefetch_factor=4
+        collate_fn=collate,
+        shuffle=True,
     )
 
-    print(f"✓ Using {optimal_workers} workers for parallel processing")
-    print(f"Train samples: {len(train_ds):,}, Test samples: {len(test_ds):,}")
-    print(f"Train batches: {len(train_loader):,}, Test batches: {len(test_loader):,}")
+    print(
+        f"Train samples: {len(tokenized_ds['train']):,}, Test samples: {len(tokenized_ds['test']):,}"
+    )
+    print(f"Train batches: {len(dl_train):,}, Test batches: {len(dl_test):,}")
+    return dl_train, dl_test, len(tokenized_ds["train"]), len(tokenized_ds["test"])
+
+
+def load_model(model: torch.nn.Module, path: str, device: torch.device):
+    state_dict = torch.load(path, map_location=device)["model_state_dict"]
+    new_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+    print(new_state_dict.keys())
+    model.load_state_dict(new_state_dict)
+
+
+def move_to_device(model: nn.Module, device) -> nn.Module:
+    # 1. Enable TF32 for faster matmul on Ampere+ GPUs (A100, RTX 3090, etc.)
+    # This provides ~2x speedup for matrix multiplications with minimal accuracy loss
+    # torch.set_float32_matmul_precision('high')  # Options: 'highest', 'high', 'medium'
+    # torch.backends.fp32_precision = 'tf32'
+
+    # 2. For MPS (Apple Silicon), ensure we're using optimal settings
+    if device.type == "mps":
+        # MPS backend is already optimized, but we can ensure memory efficiency
+        torch.mps.empty_cache()  # Clear any cached memory
+    elif device.type == "cuda":
+        # Enable TF32 for cuDNN convolutions as well
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    else:
+        print("✓ Running on CPU (no GPU optimizations)")
+
+    # Move model to device (GPU if available)
+    return model.to(device)
+
+
+if __name__ == "__main__":
+    DEVICE = torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
+    print(f"Using device: {DEVICE}")
+
+    ds = load_dataset("wmt/wmt14", "de-en")
+
+    tokenizer = HFTokenizerWrapper(get_tokenizer())
+    dl_train, dl_test, train_size, test_size = tokenizer_decode_batch(tokenizer, ds)
+
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing
+    )
 
     # Initialize the model with larger max_len to handle max_length + special tokens
     model = TranslationTransformer(
@@ -193,60 +202,42 @@ def main():
         tgt_vocab_size=len(tokenizer),
         config=configBig,
         padding_idx=tokenizer.pad_idx,
-        sharedVocab=sharedVocab
+        sharedVocab=sharedVocab,
     )
 
     print(f"Model initialized!")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # 2. For MPS (Apple Silicon), ensure we're using optimal settings
-    if DEVICE.type == "mps":
-        torch.mps.empty_cache()  # Clear any cached memory
-    elif DEVICE.type == "cuda":
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-    else:
-        print("✓ Running on CPU (no GPU optimizations)")
-
-
-    # Move model to device (GPU if available)
-    model = model.to(DEVICE)
-    model_compiled = torch.compile(model, mode='default')
-    model.train()
-
-    print(f"Using device: {DEVICE}")
-    print(f"Model moved to {DEVICE}")
+    # load_model(model, checkpoint_path, DEVICE)
+    model = move_to_device(model, DEVICE)
+    model.compile(
+        mode="default"
+    )  # Options: 'default', 'reduce-overhead', 'max-autotune'
 
     def lr_lambda(step, warmup_steps=4000):
         step = max(step, 1)
-        return configBig.d_model**(-0.5) * min(
-            step ** -0.5,
-            step * warmup_steps ** -1.5
-        )
+        return configBig.d_model ** (-0.5) * min(step**-0.5, step * warmup_steps**-1.5)
 
     # Loss function and optimizer
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing)
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing
+    )
     optimizer = optim.Adam(model.parameters(), lr=1, betas=betas, eps=epsilon)
 
     scheduler = LambdaLR(optimizer, lambda step: lr_lambda(step, warmup_steps))
 
     # Training
     train_losses, best_loss = train(
-        model=model_compiled,
+        model=model,
         config=configBig,
-        train_loader=train_loader,
-        test_loader=test_loader,
-        dataset_size=len(train_ds),
+        train_loader=dl_train,
+        test_loader=dl_test,
+        dataset_size=train_size,
         criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,
         device=DEVICE,
         num_steps=num_steps,
         eval_iters=eval_iters,
-        patience=patience,
-        checkpoint_path=checkpoint_path
+        checkpoint_path=checkpoint_path,
     )
-
-
-if __name__ == "__main__":
-    main()
