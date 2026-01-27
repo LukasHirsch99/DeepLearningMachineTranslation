@@ -2,7 +2,7 @@ from datasets import load_dataset, DatasetDict
 import torch
 from utils.translation_transformer import TransformerConfig
 from torch.utils.data import DataLoader
-from utils.parallel_corpus import collate_fn
+from utils.parallel_corpus import collate_fn, TranslationDataset, LazyTranslationPairs
 from tokenizers import Tokenizer as HFTokenizer, decoders
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -20,7 +20,7 @@ from utils.train import train
 
 vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
-checkpoint_path = "./models/aiayn_base_100k.pt"
+checkpoint_path = None  # "./checkpoints/transformer_checkpoint.pt"
 
 batch_size = 64
 dataset_max_sample_len = 100
@@ -151,6 +151,66 @@ def tokenizer_decode_batch(tokenizer: HFTokenizerWrapper, datasets: DatasetDict)
     return dl_train, dl_test, len(tokenized_ds["train"]), len(tokenized_ds["test"])
 
 
+def build_lazy_dataloaders(
+    tokenizer: HFTokenizerWrapper,
+    datasets: DatasetDict,
+    max_length: int,
+    batch_size: int,
+    num_workers: int = 0,
+):
+    """
+    Build DataLoaders with on-the-fly tokenization to avoid materializing
+    the entire dataset in memory.
+
+    This uses `TranslationDataset` with `LazyTranslationPairs` so samples are
+    read and tokenized per-batch from disk.
+    """
+
+    train_src = LazyTranslationPairs(datasets["train"], src_lang="de", tgt_lang="en", mode="src")
+    train_tgt = LazyTranslationPairs(datasets["train"], src_lang="de", tgt_lang="en", mode="tgt")
+    test_src = LazyTranslationPairs(datasets["test"], src_lang="de", tgt_lang="en", mode="src")
+    test_tgt = LazyTranslationPairs(datasets["test"], src_lang="de", tgt_lang="en", mode="tgt")
+
+    ds_train = TranslationDataset(
+        source_sentences=train_src,
+        target_sentences=train_tgt,
+        source_tokenizer=tokenizer,
+        target_tokenizer=tokenizer,
+        max_length=max_length,
+        lazy=True,
+    )
+    ds_test = TranslationDataset(
+        source_sentences=test_src,
+        target_sentences=test_tgt,
+        source_tokenizer=tokenizer,
+        target_tokenizer=tokenizer,
+        max_length=max_length,
+        lazy=True,
+    )
+
+    collate = partial(collate_fn, pad_idx=tokenizer.pad_idx)
+    dl_train = DataLoader(
+        ds_train,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=False,
+    )
+    dl_test = DataLoader(
+        ds_test,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=False,
+    )
+
+    return dl_train, dl_test, len(ds_train), len(ds_test)
+
+
 def load_model(model: torch.nn.Module, path: str, device: torch.device):
     state_dict = torch.load(path, map_location=device)["model_state_dict"]
     new_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
@@ -190,7 +250,14 @@ if __name__ == "__main__":
     ds = load_dataset("wmt/wmt14", "de-en")
 
     tokenizer = HFTokenizerWrapper(get_tokenizer())
-    dl_train, dl_test, train_size, test_size = tokenizer_decode_batch(tokenizer, ds)
+    # Prefer lazy, on-the-fly tokenization to reduce memory footprint
+    dl_train, dl_test, train_size, test_size = build_lazy_dataloaders(
+        tokenizer,
+        ds,
+        max_length=dataset_max_sample_len,
+        batch_size=batch_size,
+        num_workers=0,
+    )
 
     criterion = nn.CrossEntropyLoss(
         ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing
@@ -209,10 +276,8 @@ if __name__ == "__main__":
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # load_model(model, checkpoint_path, DEVICE)
+    # Move to device; disabling compile can save GPU memory
     model = move_to_device(model, DEVICE)
-    model.compile(
-        mode="default"
-    )  # Options: 'default', 'reduce-overhead', 'max-autotune'
 
     def lr_lambda(step, warmup_steps=4000):
         step = max(step, 1)
