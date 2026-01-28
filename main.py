@@ -22,19 +22,19 @@ vocab_path = "./data/bpe_tokenizer_40k.json"
 checkpoint_path = None
 # checkpoint_path = "./models/aiayn_base_100k.pt"
 
-batch_size = 128
+batch_size = 512
 dataset_max_sample_len = 50  # Max tokens per sample (including special tokens)
 
-compile_model = False  # Set to False to disable compilation
+compile_model = True  # Set to False to disable compilation
 
 sharedVocab = True
 
 transformerCfg = TransformerConfig(
-    d_model=256,
-    nhead=4,
-    num_encoder_layers=3,
-    num_decoder_layers=3,
-    dim_feedforward=1024,
+    d_model=512,
+    nhead=8,
+    num_encoder_layers=4,
+    num_decoder_layers=4,
+    dim_feedforward=2048,
     dropout=0.1,
     max_len=dataset_max_sample_len + 2,  # +2 for special tokens
 )
@@ -166,10 +166,24 @@ def build_lazy_dataloaders(
     """
 
     train_src = LazyTranslationPairs(
-        datasets["train"][:train_sample_limit] if train_sample_limit else datasets["train"], src_lang="de", tgt_lang="en", mode="src"
+        (
+            datasets["train"]._select_contiguous(0, train_sample_limit)
+            if train_sample_limit
+            else datasets["train"]
+        ),
+        src_lang="de",
+        tgt_lang="en",
+        mode="src",
     )
     train_tgt = LazyTranslationPairs(
-        datasets["train"][:train_sample_limit] if train_sample_limit else datasets["train"], src_lang="de", tgt_lang="en", mode="tgt"
+        (
+            datasets["train"]._select_contiguous(0, train_sample_limit)
+            if train_sample_limit
+            else datasets["train"]
+        ),
+        src_lang="de",
+        tgt_lang="en",
+        mode="tgt",
     )
     test_src = LazyTranslationPairs(
         datasets["test"], src_lang="de", tgt_lang="en", mode="src"
@@ -257,7 +271,7 @@ if __name__ == "__main__":
 
     # tokenizer = get_tokenizer()
     tokenizer = BPETokenizer(vocab_path)
-    
+
     # Prefer lazy, on-the-fly tokenization to reduce memory footprint
     dl_train, dl_test, train_size, test_size = build_lazy_dataloaders(
         tokenizer,
@@ -265,7 +279,7 @@ if __name__ == "__main__":
         max_length=dataset_max_sample_len,
         batch_size=batch_size,
         num_workers=0,
-        train_sample_limit=100_000,  # Limit training samples for faster testing
+        train_sample_limit=100_000,  # Limit training samples for faster experimentation
     )
 
     criterion = nn.CrossEntropyLoss(
