@@ -17,8 +17,8 @@ from pathlib import Path
 from functools import partial
 
 
-vocab_size = 40_000
-vocab_path = "./data/bpe_tokenizer_40k.json"
+vocab_size = 30_000
+vocab_path = "./data/bpe_tokenizer.json"
 checkpoint_path = None
 # checkpoint_path = "./models/aiayn_base_100k.pt"
 
@@ -56,15 +56,8 @@ def get_tokenizer() -> Tokenizer:
 
     bpe_tokenizer.pre_tokenizer = Metaspace()
     bpe_tokenizer.decoder = decoders.Metaspace()
-    bpe_tokenizer.post_processor = TemplateProcessing(
-        single=f"{Tokenizer.SOS_TOKEN} $A {Tokenizer.EOS_TOKEN}",
-        special_tokens=[
-            (Tokenizer.SOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.SOS_TOKEN)),
-            (Tokenizer.EOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.EOS_TOKEN)),
-        ],
-    )
 
-    pretrained = False  # Set to True if you want to load a previously saved tokenizer
+    pretrained = True  # Set to True if you want to load a previously saved tokenizer
 
     Path(vocab_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +78,7 @@ def get_tokenizer() -> Tokenizer:
             vocab_size=vocab_size,
             show_progress=True,
         )
+
         bpe_tokenizer.train(
             [
                 "./datasets/wmt14_translate_de-en_test.csv",
@@ -95,6 +89,14 @@ def get_tokenizer() -> Tokenizer:
         )
 
         bpe_tokenizer.save(vocab_path)
+
+    bpe_tokenizer.post_processor = TemplateProcessing(
+        single=f"{Tokenizer.SOS_TOKEN} $A {Tokenizer.EOS_TOKEN}",
+        special_tokens=[
+            (Tokenizer.SOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.SOS_TOKEN)),
+            (Tokenizer.EOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.EOS_TOKEN)),
+        ],
+    )
 
     print(f"Vocab size: {bpe_tokenizer.get_vocab_size():,}")
 
@@ -269,8 +271,8 @@ if __name__ == "__main__":
 
     ds = load_dataset("wmt/wmt14", "de-en")
 
-    # tokenizer = get_tokenizer()
-    tokenizer = BPETokenizer(vocab_path)
+    tokenizer = get_tokenizer()
+    # tokenizer = BPETokenizer(vocab_path)
 
     # Prefer lazy, on-the-fly tokenization to reduce memory footprint
     dl_train, dl_test, train_size, test_size = build_lazy_dataloaders(

@@ -5,7 +5,7 @@
   "added_tokens": [
     {
       "id": 0,
-      "content": "[pad]",
+      "content": "[PAD]",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -14,7 +14,7 @@
     },
     {
       "id": 1,
-      "content": "[sos]",
+      "content": "[SOS]",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -23,7 +23,7 @@
     },
     {
       "id": 2,
-      "content": "[eos]",
+      "content": "[EOS]",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -32,7 +32,7 @@
     },
     {
       "id": 3,
-      "content": "[unk]",
+      "content": "[UNK]",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -57,17 +57,17 @@
   "model": {
     "type": "BPE",
     "dropout": null,
-    "unk_token": "[unk]",
+    "unk_token": "[UNK]",
     "continuing_subword_prefix": null,
     "end_of_word_suffix": null,
     "fuse_unk": false,
     "byte_fallback": false,
     "ignore_merges": false,
     "vocab": {
-      "[pad]": 0,
-      "[sos]": 1,
-      "[eos]": 2,
-      "[unk]": 3,
+      "[PAD]": 0,
+      "[SOS]": 1,
+      "[EOS]": 2,
+      "[UNK]": 3,
       "\t": 4,
       "\n": 5,
       "\r": 6,
