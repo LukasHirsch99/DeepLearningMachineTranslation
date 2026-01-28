@@ -87,7 +87,7 @@ class MultiHeadAttention(nn.Module):
             attn_mask = ~key_padding_mask  # [batch, seq_len_kv]
             # Reshape for broadcasting: [batch, seq_len_kv] -> [batch, 1, 1, seq_len_kv]
             # This broadcasts across all heads and query positions
-            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # [batch, 1, 1, seq_len_kv]
+            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1).to(q.device)  # [batch, 1, 1, seq_len_kv]
         
         
         # Use PyTorch's optimized scaled_dot_product_attention
