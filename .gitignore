@@ -4,4 +4,5 @@ resources/
 __pycache__/
 .mypy_cache/
 .DS_Store
+venv/
 data/tokenized_dataset/
