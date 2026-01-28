@@ -177,10 +177,15 @@ class Tokenizer:
     """Base tokenizer class with support for special tokens"""
 
     # Special tokens
-    PAD_TOKEN = "[pad]"
-    SOS_TOKEN = "[sos]"  # Start of sequence
-    EOS_TOKEN = "[eos]"  # End of sequence
-    UNK_TOKEN = "[unk]"  # Unknown token
+    PAD_TOKEN = "[PAD]"
+    SOS_TOKEN = "[SOS]"  # Start of sequence
+    EOS_TOKEN = "[EOS]"  # End of sequence
+    UNK_TOKEN = "[UNK]"  # Unknown token
+    
+    PAD_IDX = 0
+    SOS_IDX = 1
+    EOS_IDX = 2
+    UNK_IDX = 3
 
     def __init__(self, lowercase: bool = True):
         self.lowercase = lowercase
@@ -244,10 +249,10 @@ class HFTokenizerWrapper(Tokenizer):
         self.tokenizer = hf_tokenizer
 
         # Get special token IDs
-        self.pad_idx = self.tokenizer.token_to_id(self.PAD_TOKEN)
-        self.sos_idx = self.tokenizer.token_to_id(self.SOS_TOKEN)
-        self.eos_idx = self.tokenizer.token_to_id(self.EOS_TOKEN)
-        self.unk_idx = self.tokenizer.token_to_id(self.UNK_TOKEN)
+        self.PAD_IDX = self.tokenizer.token_to_id(self.PAD_TOKEN)
+        self.SOS_IDX = self.tokenizer.token_to_id(self.SOS_TOKEN)
+        self.EOS_IDX = self.tokenizer.token_to_id(self.EOS_TOKEN)
+        self.UNK_IDX = self.tokenizer.token_to_id(self.UNK_TOKEN)
 
     def tokenize(self, text: str) -> List[str]:
         """
@@ -328,7 +333,7 @@ class HFTokenizerWrapper(Tokenizer):
         # Decode to string first
         text = self.tokenizer.decode(indices, skip_special_tokens=skip_special)
         # Split back into tokens for compatibility
-        return text.split()
+        return self.tokenizer.encode(text).tokens
 
     def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
         """
@@ -346,6 +351,57 @@ class HFTokenizerWrapper(Tokenizer):
     def __len__(self) -> int:
         """Return vocabulary size."""
         return self.tokenizer.get_vocab_size()
+
+
+class BPETokenizer(Tokenizer):
+    def __init__(self, tokenizer_path: str):
+        self.tokenizer: HFTokenizer = HFTokenizer.from_file(tokenizer_path)
+
+        self.PAD_IDX = self.tokenizer.token_to_id(self.PAD_TOKEN)
+        self.SOS_IDX = self.tokenizer.token_to_id(self.SOS_TOKEN)
+        self.EOS_IDX = self.tokenizer.token_to_id(self.EOS_TOKEN)
+        self.UNK_IDX = self.tokenizer.token_to_id(self.UNK_TOKEN)
+
+        self.special_ids = {self.PAD_IDX, self.SOS_IDX, self.EOS_IDX, self.UNK_IDX}
+
+    def encode(
+        self, text: str, add_sos: bool = False, add_eos: bool = False
+    ) -> List[int]:
+        encoding = self.tokenizer.encode(text)
+        tokens = encoding.ids
+
+        if add_sos:
+            tokens = [self.SOS_IDX] + tokens
+        if add_eos:
+            tokens = tokens + [self.EOS_IDX]
+        return tokens
+
+    def encode_batch(
+        self, texts: List[str], add_sos: bool = False, add_eos: bool = False
+    ) -> List[List[int]]:
+        """Encode a batch of texts into lists of indices"""
+        raise NotImplementedError
+
+    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
+        text = self.tokenizer.decode(indices, skip_special_tokens=skip_special)
+        text = text.replace(" ##", "")
+        return text
+    
+    def decode_to_text(self, indices: List[int], skip_special: bool = True) -> str:
+        text = self.tokenizer.decode(indices, skip_special_tokens=skip_special)
+        text = text.replace(" ##", "")
+        return text
+
+    def __len__(self) -> int:
+        """Return vocabulary size."""
+        return self.tokenizer.get_vocab_size()
+
+    def tokenize(self, text):
+        encoding = self.tokenizer.encode(text)
+        return encoding.tokens
+
+    def __call__(self, text, add_sos=False, add_eos=False):
+        return self.encode(text, add_sos=add_sos, add_eos=add_eos)
 
 
 class WordTokenizer(Tokenizer):
