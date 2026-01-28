@@ -1,10 +1,13 @@
 from datasets import load_dataset, DatasetDict
 import torch
+import torch.nn as nn
+from torch import optim
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import LambdaLR
 from utils.translation_transformer import TransformerConfig, TranslationTransformer
 from utils.parallel_corpus import collate_fn, TranslationDataset, LazyTranslationPairs
-from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer
-from utils.train import train, scheduled_sampling_decode
-from torch.utils.data import DataLoader
+from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer, BPETokenizer
+from utils.train import train
 from tokenizers import Tokenizer as HFTokenizer, decoders
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -12,13 +15,10 @@ from tokenizers.pre_tokenizers import Metaspace
 from tokenizers.processors import TemplateProcessing
 from pathlib import Path
 from functools import partial
-import torch.nn as nn
-from torch import optim
-from torch.optim.lr_scheduler import LambdaLR
 
 
-vocab_size = 30_000
-vocab_path = "./data/bpe_tokenizer.json"
+vocab_size = 40_000
+vocab_path = "./data/bpe_tokenizer_40k.json"
 checkpoint_path = None
 # checkpoint_path = "./models/aiayn_base_100k.pt"
 
@@ -30,8 +30,8 @@ compile_model = False  # Set to False to disable compilation
 sharedVocab = True
 
 transformerCfg = TransformerConfig(
-    d_model=512,
-    nhead=8,
+    d_model=256,
+    nhead=4,
     num_encoder_layers=3,
     num_decoder_layers=3,
     dim_feedforward=1024,
@@ -51,23 +51,20 @@ betas = (0.9, 0.98)
 epsilon = 1e-9
 
 
-def get_tokenizer() -> HFTokenizer:
+def get_tokenizer() -> Tokenizer:
     bpe_tokenizer = HFTokenizer(BPE(unk_token=Tokenizer.UNK_TOKEN))
-    trainer = BpeTrainer(
-        special_tokens=[
-            Tokenizer.PAD_TOKEN,
-            Tokenizer.SOS_TOKEN,
-            Tokenizer.EOS_TOKEN,
-            Tokenizer.UNK_TOKEN,
-        ],
-        vocab_size=vocab_size,
-        show_progress=True,
-    )
 
     bpe_tokenizer.pre_tokenizer = Metaspace()
     bpe_tokenizer.decoder = decoders.Metaspace()
+    bpe_tokenizer.post_processor = TemplateProcessing(
+        single=f"{Tokenizer.SOS_TOKEN} $A {Tokenizer.EOS_TOKEN}",
+        special_tokens=[
+            (Tokenizer.SOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.SOS_TOKEN)),
+            (Tokenizer.EOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.EOS_TOKEN)),
+        ],
+    )
 
-    pretrained = True  # Set to True if you want to load a previously saved tokenizer
+    pretrained = False  # Set to True if you want to load a previously saved tokenizer
 
     Path(vocab_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -77,14 +74,17 @@ def get_tokenizer() -> HFTokenizer:
     if pretrained:
         bpe_tokenizer = HFTokenizer.from_file(vocab_path)
 
-        bpe_tokenizer.post_processor = TemplateProcessing(
-            single=f"{Tokenizer.SOS_TOKEN} $A {Tokenizer.EOS_TOKEN}",
-            special_tokens=[
-                (Tokenizer.SOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.SOS_TOKEN)),
-                (Tokenizer.EOS_TOKEN, bpe_tokenizer.token_to_id(Tokenizer.EOS_TOKEN)),
-            ],
-        )
     else:
+        trainer = BpeTrainer(
+            special_tokens=[
+                Tokenizer.PAD_TOKEN,
+                Tokenizer.SOS_TOKEN,
+                Tokenizer.EOS_TOKEN,
+                Tokenizer.UNK_TOKEN,
+            ],
+            vocab_size=vocab_size,
+            show_progress=True,
+        )
         bpe_tokenizer.train(
             [
                 "./datasets/wmt14_translate_de-en_test.csv",
@@ -98,10 +98,10 @@ def get_tokenizer() -> HFTokenizer:
 
     print(f"Vocab size: {bpe_tokenizer.get_vocab_size():,}")
 
-    return bpe_tokenizer
+    return HFTokenizerWrapper(bpe_tokenizer)
 
 
-def tokenizer_decode_batch(tokenizer: HFTokenizerWrapper, datasets: DatasetDict):
+def tokenizer_decode_batch(tokenizer: Tokenizer, datasets: DatasetDict):
 
     def tokenize_batch(examples):
         inputs = [e["de"] for e in examples["translation"]]
@@ -126,7 +126,7 @@ def tokenizer_decode_batch(tokenizer: HFTokenizerWrapper, datasets: DatasetDict)
         },
     )
 
-    collate = partial(collate_fn, pad_idx=tokenizer.pad_idx)
+    collate = partial(collate_fn, pad_idx=tokenizer.PAD_IDX)
     dl_train = DataLoader(
         tokenized_ds["train"].with_format("torch"),
         batch_size=batch_size,
@@ -150,7 +150,7 @@ def tokenizer_decode_batch(tokenizer: HFTokenizerWrapper, datasets: DatasetDict)
 
 
 def build_lazy_dataloaders(
-    tokenizer: HFTokenizerWrapper,
+    tokenizer: Tokenizer,
     datasets: DatasetDict,
     max_length: int,
     batch_size: int,
@@ -194,7 +194,7 @@ def build_lazy_dataloaders(
         lazy=True,
     )
 
-    collate = partial(collate_fn, pad_idx=tokenizer.pad_idx)
+    collate = partial(collate_fn, pad_idx=tokenizer.PAD_IDX)
     dl_train = DataLoader(
         ds_train,
         batch_size=batch_size,
@@ -254,7 +254,9 @@ if __name__ == "__main__":
 
     ds = load_dataset("wmt/wmt14", "de-en")
 
-    tokenizer = HFTokenizerWrapper(get_tokenizer())
+    # tokenizer = get_tokenizer()
+    tokenizer = BPETokenizer(vocab_path)
+    
     # Prefer lazy, on-the-fly tokenization to reduce memory footprint
     dl_train, dl_test, train_size, test_size = build_lazy_dataloaders(
         tokenizer,
@@ -265,7 +267,7 @@ if __name__ == "__main__":
     )
 
     criterion = nn.CrossEntropyLoss(
-        ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing
+        ignore_index=tokenizer.PAD_IDX, label_smoothing=label_smoothing
     )
 
     # Initialize the model with larger max_len to handle max_length + special tokens
@@ -273,7 +275,7 @@ if __name__ == "__main__":
         src_vocab_size=len(tokenizer),
         tgt_vocab_size=len(tokenizer),
         config=transformerCfg,
-        padding_idx=tokenizer.pad_idx,
+        padding_idx=tokenizer.PAD_IDX,
         sharedVocab=sharedVocab,
     )
 
@@ -283,10 +285,10 @@ if __name__ == "__main__":
     # load_model(model, checkpoint_path, DEVICE)
     # Move to device; disabling compile can save GPU memory
     model = move_to_device(model, DEVICE)
-    
+
     # ========== TORCH.COMPILE INTEGRATION ==========
     # Compile the model for faster training (PyTorch 2.0+)
-    
+
     if compile_model and torch.__version__ >= "2.0.0":
         if DEVICE.type == "cuda":
             print("Compiling model with torch.compile...")
@@ -310,17 +312,16 @@ if __name__ == "__main__":
         else:
             print(f"torch.compile requires PyTorch 2.0+ (current: {torch.__version__})")
     # ===============================================
-    
-    
-    
 
     def lr_lambda(step, warmup_steps=4000):
         step = max(step, 1)
-        return transformerCfg.d_model ** (-0.5) * min(step**-0.5, step * warmup_steps**-1.5)
+        return transformerCfg.d_model ** (-0.5) * min(
+            step**-0.5, step * warmup_steps**-1.5
+        )
 
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(
-        ignore_index=tokenizer.pad_idx, label_smoothing=label_smoothing
+        ignore_index=tokenizer.PAD_IDX, label_smoothing=label_smoothing
     )
     optimizer = optim.Adam(model.parameters(), lr=1, betas=betas, eps=epsilon)
 
@@ -337,8 +338,8 @@ if __name__ == "__main__":
         optimizer=optimizer,
         scheduler=scheduler,
         device=DEVICE,
-        sos_idx=tokenizer.sos_idx,
-        pad_idx=tokenizer.pad_idx,
+        sos_idx=tokenizer.SOS_IDX,
+        pad_idx=tokenizer.PAD_IDX,
         teacher_forcing_start=1.0,
         teacher_forcing_end=0.5,
         teacher_forcing_decay_steps=num_steps,
