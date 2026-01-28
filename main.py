@@ -25,6 +25,8 @@ checkpoint_path = "./models/aiayn_base_100k.pt"
 batch_size = 128
 dataset_max_sample_len = 100
 
+compile_model = True  # Set to False to disable compilation
+
 sharedVocab = True
 
 configBig = TransformerConfig(
@@ -285,7 +287,6 @@ if __name__ == "__main__":
     
     # ========== TORCH.COMPILE INTEGRATION ==========
     # Compile the model for faster training (PyTorch 2.0+)
-    compile_model = True  # Set to False to disable compilation
     
     if compile_model and torch.__version__ >= "2.0.0":
         if DEVICE.type == "cuda":
