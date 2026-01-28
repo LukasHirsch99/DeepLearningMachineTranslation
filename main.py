@@ -20,30 +20,29 @@ from torch.optim.lr_scheduler import LambdaLR
 vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
 checkpoint_path = None
-checkpoint_path = "./models/aiayn_base_100k.pt"
+# checkpoint_path = "./models/aiayn_base_100k.pt"
 
 batch_size = 128
-dataset_max_sample_len = 100
+dataset_max_sample_len = 50  # Max tokens per sample (including special tokens)
 
-compile_model = True  # Set to False to disable compilation
+compile_model = False  # Set to False to disable compilation
 
 sharedVocab = True
 
-configBig = TransformerConfig(
+transformerCfg = TransformerConfig(
     d_model=512,
     nhead=8,
-    num_encoder_layers=6,
-    num_decoder_layers=6,
-    dim_feedforward=2048,
+    num_encoder_layers=3,
+    num_decoder_layers=3,
+    dim_feedforward=1024,
     dropout=0.1,
-    max_len=150,
+    max_len=dataset_max_sample_len + 2,  # +2 for special tokens
 )
 
 # training
 num_steps = 100_000
 warmup_steps = 4_000
 eval_iters = 10
-patience = 1_000
 
 label_smoothing = 0.1
 
@@ -273,7 +272,7 @@ if __name__ == "__main__":
     model = TranslationTransformer(
         src_vocab_size=len(tokenizer),
         tgt_vocab_size=len(tokenizer),
-        config=configBig,
+        config=transformerCfg,
         padding_idx=tokenizer.pad_idx,
         sharedVocab=sharedVocab,
     )
@@ -317,7 +316,7 @@ if __name__ == "__main__":
 
     def lr_lambda(step, warmup_steps=4000):
         step = max(step, 1)
-        return configBig.d_model ** (-0.5) * min(step**-0.5, step * warmup_steps**-1.5)
+        return transformerCfg.d_model ** (-0.5) * min(step**-0.5, step * warmup_steps**-1.5)
 
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(
@@ -330,7 +329,7 @@ if __name__ == "__main__":
     # Training
     train_losses, best_loss = train(
         model=model,
-        config=configBig,
+        config=transformerCfg,
         train_loader=dl_train,
         test_loader=dl_test,
         dataset_size=train_size,
@@ -341,8 +340,8 @@ if __name__ == "__main__":
         sos_idx=tokenizer.sos_idx,
         pad_idx=tokenizer.pad_idx,
         teacher_forcing_start=1.0,
-        teacher_forcing_end=0.1,
-        teacher_forcing_decay_steps=num_steps // 2,
+        teacher_forcing_end=0.5,
+        teacher_forcing_decay_steps=num_steps,
         num_steps=num_steps,
         eval_iters=eval_iters,
         checkpoint_path=checkpoint_path,

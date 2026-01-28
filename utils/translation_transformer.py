@@ -226,11 +226,9 @@ class TranslationTransformer(nn.Module):
         # Embeddings and positional encoding
         src_emb = self.src_embedding(src)
         src_emb = self.positional_encoding(src_emb)
-        # src_emb = self.dropout(src_emb)
 
         tgt_emb = self.tgt_embedding(tgt)
         tgt_emb = self.positional_encoding(tgt_emb)
-        # tgt_emb = self.dropout(tgt_emb)
 
         # Encoder
         encoder_output = src_emb
