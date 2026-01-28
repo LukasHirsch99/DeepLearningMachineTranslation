@@ -207,7 +207,7 @@ class Tokenizer:
         raise NotImplementedError
 
     def encode(
-        self, tokens: List[str], add_sos: bool = False, add_eos: bool = False
+        self, text: str, add_sos: bool = False, add_eos: bool = False
     ) -> List[int]:
         """Convert tokens to indices"""
         raise NotImplementedError
@@ -272,37 +272,27 @@ class HFTokenizerWrapper(Tokenizer):
         Returns:
             Detokenized text string
         """
-        return self.tokenizer.decode(self.tokenizer.encode(tokens).ids)
+        return self.tokenizer.decode(
+            self.tokenizer.encode(tokens, is_pretokenized=True).ids
+        )
 
     def encode(
-        self, tokens: List[str], add_sos: bool = False, add_eos: bool = False
+        self, text: str, add_sos: bool = False, add_eos: bool = False
     ) -> List[int]:
         """
-        Convert tokens to indices.
+        Convert text to indices.
 
         Args:
-            tokens: List of tokens (already tokenized)
+            text: Input text string
             add_sos: Add start-of-sequence token
             add_eos: Add end-of-sequence token
 
         Returns:
             List of token indices
         """
-        indices = []
-
-        if add_sos:
-            indices.append(self.sos_idx)
-
-        for token in tokens:
-            idx = self.tokenizer.token_to_id(token)
-            if idx is None:
-                idx = self.unk_idx
-            indices.append(idx)
-
-        if add_eos:
-            indices.append(self.eos_idx)
-
-        return indices
+        startIdx = 0 if add_sos else 1
+        endIdx = None if add_eos else -1
+        return self.tokenizer.encode(text, add_special_tokens=True).ids[startIdx:endIdx]
 
     def encode_batch(
         self, texts: List[str], add_sos: bool = False, add_eos: bool = False
@@ -318,9 +308,11 @@ class HFTokenizerWrapper(Tokenizer):
         Returns:
             List of lists of token indices
         """
-        # Use fast batch encoding - add_special_tokens already includes BOS/EOS
+        # Use fast batch encoding - add_special_tokens already includes SOS/EOS
+        startIdx = 0 if add_sos else 1
+        endIdx = None if add_eos else -1
         encodings = self.tokenizer.encode_batch(texts, add_special_tokens=True)
-        return [enc.ids for enc in encodings]
+        return [enc.ids[startIdx:endIdx] for enc in encodings]
 
     def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
         """
@@ -406,10 +398,10 @@ class WordTokenizer(Tokenizer):
         self.vocab.build_from_texts(tokenized_texts)
 
     def encode(
-        self, tokens: List[str], add_sos: bool = False, add_eos: bool = False
+        self, text: str, add_sos: bool = False, add_eos: bool = False
     ) -> List[int]:
         """Convert tokens to indices using the internal vocabulary."""
-        return self.vocab.encode(tokens, add_sos=add_sos, add_eos=add_eos)
+        return self.vocab.encode(self.tokenize(text), add_sos=add_sos, add_eos=add_eos)
 
     def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
         """Convert indices back to tokens using the internal vocabulary."""

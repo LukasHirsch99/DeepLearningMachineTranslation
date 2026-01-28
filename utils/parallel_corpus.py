@@ -98,26 +98,15 @@ class TranslationDataset(Dataset):
 
         for src_sent, tgt_sent in zip(self._source_sentences, self._target_sentences):
 
-            src_tokens = self._source_tokenizer.tokenize(src_sent)
-            tgt_tokens = self._target_tokenizer.tokenize(tgt_sent)
+            src_indices = self._source_tokenizer.encode(src_sent, add_sos=False, add_eos=True)
+            tgt_indices = self._target_tokenizer.encode(tgt_sent, add_sos=True, add_eos=True)
 
             # Skip if too long
             if self.max_length and (
-                len(src_tokens) > self.max_length or len(tgt_tokens) > self.max_length
+                len(src_indices) > self.max_length or len(tgt_indices) > self.max_length
             ):
                 skipped += 1
                 continue
-
-            # Encode
-            # Source: add <eos> only
-            src_indices = self._source_tokenizer.encode(
-                src_tokens, add_sos=False, add_eos=True
-            )
-
-            # Target: add <sos> and <eos>
-            tgt_indices = self._target_tokenizer.encode(
-                tgt_tokens, add_sos=True, add_eos=True
-            )
 
             self.source_encoded.append(src_indices)
             self.target_encoded.append(tgt_indices)
@@ -149,24 +138,13 @@ class TranslationDataset(Dataset):
             tgt_sent = self._target_sentences[idx]
 
             # Tokenize
-            src_tokens = self._source_tokenizer.tokenize(src_sent)
-            tgt_tokens = self._target_tokenizer.tokenize(tgt_sent)
+            src_indices = self._source_tokenizer.encode(src_sent, add_sos=False, add_eos=True)
+            tgt_indices = self._target_tokenizer.encode(tgt_sent, add_sos=True, add_eos=True)
 
             # Apply max_length filter (truncate instead of skip for lazy mode)
             if self.max_length:
-                src_tokens = src_tokens[: self.max_length]
-                tgt_tokens = tgt_tokens[: self.max_length]
-
-            # Encode
-            # Source: add <eos> only
-            src_indices = self._source_tokenizer.encode(
-                src_tokens, add_sos=False, add_eos=True
-            )
-
-            # Target: add <sos> and <eos>
-            tgt_indices = self._target_tokenizer.encode(
-                tgt_tokens, add_sos=True, add_eos=True
-            )
+                src_indices = src_indices[: self.max_length]
+                tgt_indices = tgt_indices[: self.max_length]
 
             src = torch.tensor(src_indices, dtype=torch.long)
             tgt = torch.tensor(tgt_indices, dtype=torch.long)
@@ -174,52 +152,6 @@ class TranslationDataset(Dataset):
             # Use preprocessed data
             src = torch.tensor(self.source_encoded[idx], dtype=torch.long)
             tgt = torch.tensor(self.target_encoded[idx], dtype=torch.long)
-
-        return {"src": src, "tgt": tgt}
-
-
-class TranslationDataset2(Dataset):
-    """
-    PyTorch Dataset for neural machine translation with lazy loading.
-    Processes data on-the-fly instead of materializing in memory.
-    """
-
-    def __init__(
-        self,
-        source_sentences: List[torch.Tensor],
-        target_sentences: List[torch.Tensor],
-        max_length: Optional[int] = None,
-    ):
-        """
-        Initialize translation dataset.
-
-        Args:
-            source_sentences: List or iterable of source language sentences
-            target_sentences: List or iterable of target language sentences
-            max_length: Maximum sequence length (filters out longer sequences)
-        """
-        self._source_sentences = source_sentences
-        self._target_sentences = target_sentences
-        self.max_length = max_length
-        self._length = len(source_sentences)
-
-    def __len__(self) -> int:
-        """Return dataset size."""
-        return self._length
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """
-        Get a single training example.
-
-        Args:
-            idx: Index of the example
-
-        Returns:
-            Dictionary with keys "src" and "tgt" containing tensors
-        """
-        # Process on-the-fly
-        src = self._source_sentences[idx]
-        tgt = self._target_sentences[idx]
 
         return {"src": src, "tgt": tgt}
 
@@ -265,7 +197,7 @@ class DataLoaderFactory:
 
     @staticmethod
     def create_dataloader(
-        dataset: TranslationDataset2,
+        dataset: TranslationDataset,
         batch_size: int,
         pad_idx: int,
         num_workers: int = 0,
@@ -310,9 +242,9 @@ class DataLoaderFactory:
 
     @staticmethod
     def create_dataloaders(
-        train_dataset: TranslationDataset2,
-        val_dataset: TranslationDataset2,
-        test_dataset: Optional[TranslationDataset2],
+        train_dataset: TranslationDataset,
+        val_dataset: TranslationDataset,
+        test_dataset: Optional[TranslationDataset],
         batch_size: int,
         pad_idx: int,
         num_workers: int = 0,

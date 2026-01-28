@@ -140,6 +140,62 @@ def estimate_loss(
     return sum(losses) / len(losses)
 
 
+def scheduled_sampling_decode(
+    model: torch.nn.Module,
+    src: torch.Tensor,
+    tgt: torch.Tensor,
+    src_key_padding_mask: torch.Tensor,
+    tgt_key_padding_mask: torch.Tensor,
+    sampling_prob: float,
+    device: torch.device,
+):
+    """
+    Fast parallel scheduled sampling - replaces slow greedy_decode_batch.
+    Mix ground truth with model predictions in a single forward pass.
+    """
+    batch_size, tgt_len = tgt.shape
+    # Start with ground truth input (shifted)
+    tgt_input = tgt[:, :-1].clone()  # [batch, tgt_len-1]
+    tgt_input_mask = tgt_key_padding_mask[:, :-1].clone()  # [batch, tgt_len-1]
+
+    # Random mask: where to use predictions (True) vs ground truth (False)
+    # Don't replace SOS token or padding
+    use_prediction = torch.rand(batch_size, tgt_len - 1, device=device) < sampling_prob
+    use_prediction[:, 0] = False  # Always keep SOS token
+
+    # Mask out padded positions
+    use_prediction = use_prediction & ~tgt_input_mask
+
+    if use_prediction.any():
+        # First pass: get predictions with ground truth
+        with torch.no_grad():
+            logits = model(
+                src,
+                tgt_input,
+                src_key_padding_mask=src_key_padding_mask,
+                tgt_key_padding_mask=tgt_input_mask,
+            )  # [batch, tgt_len-1, vocab_size]
+            predictions = logits.argmax(dim=-1)  # [batch, tgt_len-1]
+
+        # For sequences using predictions, shift predictions right
+        # predictions[:, i] predicts position i+1, so:
+        # new_input[:, i+1] = predictions[:, i]
+        shifted_predictions = torch.cat(
+            [
+                tgt_input[:, :1],  # Keep SOS
+                predictions[:, :-1],  # Shift predictions right
+            ],
+            dim=1,
+        )
+
+        # Replace entire sequences based on use_prediction mask
+        tgt_input = torch.where(
+            use_prediction, shifted_predictions, tgt_input  # [batch, 1]
+        )
+
+    return tgt_input, tgt_input_mask
+
+
 @torch.no_grad()
 def greedy_decode_batch(
     model, src, src_key_padding_mask, max_len, device, sos_idx, pad_idx
@@ -184,6 +240,7 @@ def train(
     num_steps=15,
     eval_iters=10,  # Number of batches for loss estimation
     checkpoint_path: str | None = None,
+    use_scheduled_sampling: bool = True,
 ):
     def teacher_forcing_ratio(step: int) -> float:
         # Linear decay; clamp at teacher_forcing_end
@@ -226,11 +283,9 @@ def train(
 
         start_time = time.time()
 
-        total_loss = 0
-        num_batches = 0
-
         for batch in train_loader:
             if step >= num_steps:
+                break_training = True
                 break
 
             src, tgt, src_key_padding_mask, tgt_key_padding_mask = batch
@@ -241,22 +296,35 @@ def train(
             src_input_mask = src_key_padding_mask.to(device)  # [batch, src_len]
 
             tf_ratio = teacher_forcing_ratio(step)
-            use_teacher = torch.rand(1).item() < tf_ratio
 
-            if use_teacher:
-                tgt_input = tgt[:, :-1]
-                tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
-            else:
-                # Greedy decode to build decoder input without ground truth
-                tgt_input, tgt_input_mask = greedy_decode_batch(
+            if use_scheduled_sampling:
+                # Get decoder input using scheduled sampling
+                tgt_input, tgt_input_mask = scheduled_sampling_decode(
                     model,
                     src,
-                    src_key_padding_mask,
-                    max_len=tgt.size(1) - 1,
+                    tgt,
+                    src_input_mask,
+                    tgt_key_padding_mask.to(device),
+                    sampling_prob=1.0 - tf_ratio,
                     device=device,
-                    sos_idx=sos_idx,
-                    pad_idx=pad_idx,
                 )
+            else:
+                use_teacher = torch.rand(1).item() < tf_ratio
+
+                if use_teacher:
+                    tgt_input = tgt[:, :-1]
+                    tgt_input_mask = tgt_key_padding_mask[:, :-1]  # [batch, tgt_len-1]
+                else:
+                    # Greedy decode to build decoder input without ground truth
+                    tgt_input, tgt_input_mask = greedy_decode_batch(
+                        model,
+                        src,
+                        src_key_padding_mask,
+                        max_len=tgt.size(1) - 1,
+                        device=device,
+                        sos_idx=sos_idx,
+                        pad_idx=pad_idx,
+                    )
 
             tgt_input = tgt_input.to(device)
             tgt_input_mask = tgt_input_mask.to(device)  # [batch, tgt_len-1]
@@ -291,38 +359,31 @@ def train(
             # Step the scheduler
             scheduler.step()
 
-            total_loss += loss.item()
-            num_batches += 1
-
             step += 1
-            print(
-                f"[Step {step:,}/{num_steps:,}] - Training Loss: {loss.item():.4f}\r", end=""
-            )
-            
+
+            train_losses.append(loss.item())
             # Print progress every n steps
             if step % nstep_evaluation == 0:
                 nsteps_time = time.time() - start_time
-                avg_loss = total_loss / num_batches
-                train_losses.append(avg_loss)
                 validation_loss = estimate_loss(
                     model, test_loader, criterion, device, eval_iters=eval_iters
                 )
                 validation_losses.append(validation_loss)
                 current_lr = optimizer.param_groups[0]["lr"]
-                
+
                 print(
-                    f"\n[Step {step:,}/{num_steps:,}] - Training Loss: {avg_loss:.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}"
+                    f"[Step {step:,}/{num_steps:,}] - Training Loss: {loss.item():.4f}, Validation Loss: {validation_loss:.4f}, Time/step: {nsteps_time / nstep_evaluation:.2f}sec, lr: {current_lr:.8f}"
                 )
 
                 log_training_step(
                     csv_path="./training_log.csv",
                     step=step,
                     epoch=step // len(train_loader),
-                    loss=avg_loss,
+                    loss=loss.item(),
                     optimizer=optimizer,
                     extra_metrics={"tf_ratio": tf_ratio, "val_loss": validation_loss},
                 )
-                
+
                 # Early stopping check
                 if validation_loss < best_val_loss:
                     best_val_loss = validation_loss
@@ -331,10 +392,12 @@ def train(
                         model, config, "./models", "best_model.pt", optimizer, step
                     )
 
-                total_loss = 0
-                num_batches = 0
-
                 start_time = time.time()
+            else:
+                print(
+                    f"[Step {step:,}/{num_steps:,}] - Training Loss: {loss.item():.4f}\r",
+                    end="",
+                )
 
     print("\n✓ Training complete!")
     print(f"Final loss: {train_losses[-1]:.4f}")

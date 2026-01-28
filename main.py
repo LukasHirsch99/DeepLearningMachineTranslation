@@ -1,26 +1,26 @@
 from datasets import load_dataset, DatasetDict
 import torch
-from utils.translation_transformer import TransformerConfig
-from torch.utils.data import DataLoader
+from utils.translation_transformer import TransformerConfig, TranslationTransformer
 from utils.parallel_corpus import collate_fn, TranslationDataset, LazyTranslationPairs
+from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer
+from utils.train import train, scheduled_sampling_decode
+from torch.utils.data import DataLoader
 from tokenizers import Tokenizer as HFTokenizer, decoders
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Metaspace
 from tokenizers.processors import TemplateProcessing
-from utils.tokenization_vocab import HFTokenizerWrapper, Tokenizer
 from pathlib import Path
 from functools import partial
-from utils.translation_transformer import TranslationTransformer
 import torch.nn as nn
 from torch import optim
 from torch.optim.lr_scheduler import LambdaLR
-from utils.train import train
 
 
 vocab_size = 30_000
 vocab_path = "./data/bpe_tokenizer.json"
-checkpoint_path = None  # "./checkpoints/transformer_checkpoint.pt"
+checkpoint_path = None
+checkpoint_path = "./models/aiayn_base_100k.pt"
 
 batch_size = 128
 dataset_max_sample_len = 100
@@ -163,10 +163,18 @@ def build_lazy_dataloaders(
     read and tokenized per-batch from disk.
     """
 
-    train_src = LazyTranslationPairs(datasets["train"], src_lang="de", tgt_lang="en", mode="src")
-    train_tgt = LazyTranslationPairs(datasets["train"], src_lang="de", tgt_lang="en", mode="tgt")
-    test_src = LazyTranslationPairs(datasets["test"], src_lang="de", tgt_lang="en", mode="src")
-    test_tgt = LazyTranslationPairs(datasets["test"], src_lang="de", tgt_lang="en", mode="tgt")
+    train_src = LazyTranslationPairs(
+        datasets["train"], src_lang="de", tgt_lang="en", mode="src"
+    )
+    train_tgt = LazyTranslationPairs(
+        datasets["train"], src_lang="de", tgt_lang="en", mode="tgt"
+    )
+    test_src = LazyTranslationPairs(
+        datasets["test"], src_lang="de", tgt_lang="en", mode="src"
+    )
+    test_tgt = LazyTranslationPairs(
+        datasets["test"], src_lang="de", tgt_lang="en", mode="tgt"
+    )
 
     ds_train = TranslationDataset(
         source_sentences=train_src,
@@ -211,7 +219,6 @@ def build_lazy_dataloaders(
 def load_model(model: torch.nn.Module, path: str, device: torch.device):
     state_dict = torch.load(path, map_location=device)["model_state_dict"]
     new_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-    print(new_state_dict.keys())
     model.load_state_dict(new_state_dict)
 
 
@@ -275,6 +282,37 @@ if __name__ == "__main__":
     # load_model(model, checkpoint_path, DEVICE)
     # Move to device; disabling compile can save GPU memory
     model = move_to_device(model, DEVICE)
+    
+    # ========== TORCH.COMPILE INTEGRATION ==========
+    # Compile the model for faster training (PyTorch 2.0+)
+    compile_model = True  # Set to False to disable compilation
+    
+    if compile_model and torch.__version__ >= "2.0.0":
+        if DEVICE.type == "cuda":
+            print("Compiling model with torch.compile...")
+            try:
+                model = torch.compile(
+                    model,
+                    mode="default",  # "default", "reduce-overhead", "max-autotune"
+                    fullgraph=False,
+                )
+                print("✓ Model compiled successfully!")
+            except Exception as e:
+                print(f"⚠ Compilation failed: {e}")
+                print("Continuing without compilation...")
+        elif DEVICE.type == "mps":
+            print("⚠ torch.compile not fully supported on MPS yet")
+        else:
+            print("⚠ torch.compile only works on CUDA")
+    else:
+        if not compile_model:
+            print("torch.compile disabled by user")
+        else:
+            print(f"torch.compile requires PyTorch 2.0+ (current: {torch.__version__})")
+    # ===============================================
+    
+    
+    
 
     def lr_lambda(step, warmup_steps=4000):
         step = max(step, 1)
