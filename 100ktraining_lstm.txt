@@ -1,0 +1,25 @@
+(main) root@C.30297343:/workspace$ python run_train_lstm.py 
+Using device: cuda
+Vocab size: 30000 | PAD idx: 0
+Train samples: 4508074, Val samples: 3000
+Initialized lazy dataset with 4508074 sentence pairs
+Initialized lazy dataset with 3000 sentence pairs
+Using 100000 training samples
+Train batches: 1563, Val batches: 47
+[Epoch 1/100] Train Loss: 5.9041 | Val Loss: 5.5190
+Model saved at models/best_model.pt
+[Epoch 2/100] Train Loss: 4.7945 | Val Loss: 4.8331
+Model saved at models/best_model.pt
+[Epoch 3/100] Train Loss: 4.1819 | Val Loss: 4.4488
+Model saved at models/best_model.pt
+[Epoch 4/100] Train Loss: 3.7551 | Val Loss: 4.2447
+Model saved at models/best_model.pt
+[Epoch 5/100] Train Loss: 3.4444 | Val Loss: 4.1475
+Model saved at models/best_model.pt
+[Epoch 6/100] Train Loss: 3.2092 | Val Loss: 4.0987
+Model saved at models/best_model.pt
+[Epoch 7/100] Train Loss: 3.0249 | Val Loss: 4.0898
+Model saved at models/best_model.pt
+[Epoch 8/100] Train Loss: 2.8752 | Val Loss: 4.1020
+[Epoch 9/100] Train Loss: 2.7513 | Val Loss: 4.1113
+
