@@ -155,6 +155,7 @@ def build_lazy_dataloaders(
     max_length: int,
     batch_size: int,
     num_workers: int = 0,
+    train_sample_limit: int | None = None,
 ):
     """
     Build DataLoaders with on-the-fly tokenization to avoid materializing
@@ -165,10 +166,10 @@ def build_lazy_dataloaders(
     """
 
     train_src = LazyTranslationPairs(
-        datasets["train"], src_lang="de", tgt_lang="en", mode="src"
+        datasets["train"][:train_sample_limit] if train_sample_limit else datasets["train"], src_lang="de", tgt_lang="en", mode="src"
     )
     train_tgt = LazyTranslationPairs(
-        datasets["train"], src_lang="de", tgt_lang="en", mode="tgt"
+        datasets["train"][:train_sample_limit] if train_sample_limit else datasets["train"], src_lang="de", tgt_lang="en", mode="tgt"
     )
     test_src = LazyTranslationPairs(
         datasets["test"], src_lang="de", tgt_lang="en", mode="src"
@@ -264,6 +265,7 @@ if __name__ == "__main__":
         max_length=dataset_max_sample_len,
         batch_size=batch_size,
         num_workers=0,
+        train_sample_limit=100_000,  # Limit training samples for faster testing
     )
 
     criterion = nn.CrossEntropyLoss(
