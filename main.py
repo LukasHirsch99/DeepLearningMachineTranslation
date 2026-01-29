@@ -281,7 +281,7 @@ if __name__ == "__main__":
         max_length=dataset_max_sample_len,
         batch_size=batch_size,
         num_workers=0,
-        train_sample_limit=100_000,  # Limit training samples for faster experimentation
+        train_sample_limit=10_000,  # Use 10k samples to test overfitting
     )
 
     criterion = nn.CrossEntropyLoss(

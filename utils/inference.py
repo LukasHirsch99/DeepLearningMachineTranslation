@@ -1,4 +1,4 @@
-from utils.tokenization_vocab import HFTokenizerWrapper
+from utils.tokenization_vocab import Tokenizer
 from torch import nn
 from torch.nn import functional as F
 import torch
@@ -28,11 +28,11 @@ def evalute_model(
 def greedy_translate(
     model: nn.Module,
     input_sequence: torch.Tensor,
-    src_tokenizer: HFTokenizerWrapper,
-    tgt_tokenizer: HFTokenizerWrapper,
+    src_tokenizer: Tokenizer,
+    tgt_tokenizer: Tokenizer,
     max_len=100,
     device=torch.device("cpu"),
-) -> torch.Tensor:
+) -> list[int]:
     """
     Translate a single sentence using the model with autoregressive generation.
 
@@ -50,7 +50,7 @@ def greedy_translate(
     model.eval()
 
     input_sequence = input_sequence.to(device) # [1, src_len]
-    tgt_sequence = [tgt_tokenizer.sos_idx]  # Start with SOS token
+    tgt_sequence = [tgt_tokenizer.SOS_IDX]  # Start with SOS token
     tgt_sequence = torch.tensor(
         [tgt_sequence], dtype=torch.long, device=device
     )  # [1, 1]
@@ -74,7 +74,7 @@ def greedy_translate(
         )
 
         # Stop if we predict EOS token
-        if next_token == tgt_tokenizer.eos_idx:
+        if next_token == tgt_tokenizer.EOS_IDX:
             break
 
     return tgt_sequence.tolist()[0]
